@@ -1,0 +1,11 @@
+[package]
+name = "stela"
+version = "0.0.1"
+edition = "2021"
+authors = ["Lithair Team"]
+license = "MIT OR Apache-2.0"
+description = "Single-binary blog engine powered by Lithair — your words, set in stone. In development."
+repository = "https://github.com/lithair/stela"
+homepage = "https://stela.run"
+keywords = ["blog", "cms", "lithair", "single-binary"]
+categories = ["web-programming"]
