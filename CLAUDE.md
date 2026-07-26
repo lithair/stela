@@ -65,6 +65,24 @@ Zola-theme compatibility, any second front-end stack.
   development a `[patch.crates-io]` on the local checkout
   (`../lithair/lithair-core`) is fine, but it must never be committed.
 
+## The full-stack dogfooding intent
+
+Stela is the first project meant to run the maintainer's ENTIRE toolchain,
+one tool per lifecycle phase — integrate in this order, and never gate the
+MVP on the later ones:
+
+1. **lithair** (runtime — day 1, it IS the product)
+2. **cidx** (CI — day 1, copy the proven cidx.toml pattern from the lithair repo)
+3. **probatum** (`~/projects/probatum`, declarative test runner with embedded
+   curl/grep/process checks — adopt for E2E smoke as soon as the binary
+   serves something: start, hit `/`, validate RSS)
+4. **configorator** (`~/projects/configurator/configorator`, provisioning +
+   deploy from one YAML — adopt last; "one sync to your VPS" is the closing
+   act of the demo, not the opening)
+
+Every friction found in any of the four is an upstream issue to file/fix —
+that's half the point.
+
 ## Commands
 
 ```bash
