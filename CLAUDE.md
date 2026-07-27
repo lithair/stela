@@ -126,9 +126,25 @@ then post with `gh issue create`.
 
 **Upstream issues filed from this project:**
 - [cidx#190](https://github.com/cidx-org/cidx/issues/190) — `cidx doctor`
-  passes on Podman (`pkg/doctor/doctor.go:87`) while the Podman executor does
-  not exist (`pkg/executor/selector.go:81`). Green light on an environment
-  where no pipeline can run. Open, awaiting a direction before any PR.
+  passed on Podman while the Podman executor did not exist. **CLOSED**, fixed
+  by cidx#191, shipped in v2.1.1 the same day.
+- [cidx#193](https://github.com/cidx-org/cidx/issues/193) — cidx's `go.mod`
+  has no `/v2` suffix, so `go install ...@latest` (what every generated
+  workflow runs) silently installs **v1.8.0**, and no v2.x is installable at
+  all. This is why `.github/workflows/cidx.yml` has a HAND-PATCHED bootstrap
+  that clones and builds from source. Re-apply it after every
+  `cidx generate github`.
+- [cidx#194](https://github.com/cidx-org/cidx/issues/194) — the stock
+  `cargo-audit` preset unpacks into `/usr/local/bin` while containers run
+  non-root; the security phase exits 2. Overridden in cidx.toml.
+- [cidx#195](https://github.com/cidx-org/cidx/issues/195) — the `probatum`
+  preset's Alpine image cannot execute the glibc binary the `cargo-build`
+  preset produces. Worked around by the musl build in `.cidx/presets.toml`.
+  Also covers the custom-preset docs omitting `workdir`/`volumes`, and cidx
+  container names not being scoped per project.
+
+Drop each workaround when its issue closes — that is the point of tracking
+them here rather than letting them calcify into "how stela does things".
 
 ## Commands
 
