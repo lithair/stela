@@ -1,0 +1,26 @@
+# CIDX Configuration
+# Auto-detected: Rust project
+#
+# Edit to match your needs. Run 'cidx preset list' for all available tools.
+# Run 'cidx validate' to check, 'cidx run ci' to execute.
+
+[security]
+containers = ["trivy", "gitleaks", "cargo-audit"]
+
+# prettier dropped: `cidx init` auto-added it, but this repo is Rust-only and
+# its sole target is the hand-wrapped Markdown (79 cols, matching CLAUDE.md).
+# Re-add with a .prettierrc when the default theme ships CSS.
+[code]
+containers = ["clippy", "rustfmt", "commitizen"]
+
+[test]
+containers = ["cargo-test"]
+
+[build]
+containers = ["cargo-build"]
+
+[pipelines.ci]
+phases = ["security", "code", "test", "build"]
+
+[pipelines.pr]
+phases = ["security", "code", "test"]

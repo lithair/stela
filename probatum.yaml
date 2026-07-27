@@ -1,0 +1,15 @@
+# probatum checks stela's behaviour — what the binary DOES.
+# Code quality (clippy, rustfmt, audit) belongs to cidx; no overlap.
+#
+#   probatum run
+#
+# Today stela only prints its banner, so these checks are deliberately thin.
+# They grow with the product: once `stela serve` exists, this file gets the
+# service check CLAUDE.md calls for — start it, GET /, validate the RSS —
+# which is the whole reason probatum is in the stack.
+
+- run: cargo build
+
+- name: binary announces itself and exits clean
+  run: ./target/debug/stela
+  contains: ["Stela", "Lithair"]
