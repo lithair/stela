@@ -1,0 +1,43 @@
+# Project-level cidx presets.
+#
+# cargo-build-musl is stela's build, for both the test and build phases. The
+# release artifact is a statically linked musl binary, deliberately:
+#
+#   - "One binary, zero infrastructure" is the product's reason to exist. A
+#     glibc binary is already one file, but it refuses to start on any host
+#     whose glibc is older than the build's (`GLIBC_2.xx not found`). A
+#     static-pie musl binary runs on any Linux, Alpine included — which is what
+#     "copy it to your VPS and run it" actually requires, and what configorator
+#     will deploy.
+#   - It is also the only artifact cidx's probatum preset can execute: that
+#     image is Alpine/musl and has no glibc loader (cidx-org/cidx#195).
+#
+# Why clux/muslrust and not cidx's stock rust image: lithair-core pulls rustls,
+# whose aws-lc-rs backend has a C component, so the build needs a musl C
+# toolchain. Installing it at runtime is not an option — cidx runs containers
+# as a non-root user and `apt-get` dies on
+# `Could not open lock file /var/lib/apt/lists/lock`. clux/muslrust ships the
+# toolchain already. Pinned to the 1.95.0 toolchain so every phase compiles
+# with the same rustc as cidx's stock rust:1.95.0 presets.
+#
+# CARGO_HOME is redirected because the image's default (/opt/cargo) is
+# root-owned and unwritable by the non-root container user. /.cargo is
+# gitignored.
+#
+# Verified against lithair-core 1.3.0: builds clean, produces static-pie, runs
+# on bare alpine.
+#
+# ponytail: musl's allocator is slower than glibc's under thread contention,
+# which is the one place this could bite a memory-first server. Not measured,
+# and not worth measuring before there is a server to measure. If throughput
+# ever disappoints, swap in jemalloc or mimalloc as the global allocator before
+# giving up on static linking.
+
+[presets.cargo-build-musl]
+name = "cargo-build-musl"
+image = "clux/muslrust:1.95.0-stable"
+command = "sh -c 'CARGO_HOME=/work/.cargo cargo build --release --target x86_64-unknown-linux-musl'"
+phase = "build"
+workdir = "/work"
+volumes = ["${WORKSPACE}:/work"]
+description = "Static musl release build — stela's shipping artifact"

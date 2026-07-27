@@ -1,0 +1,49 @@
+# CIDX Configuration
+# Auto-detected: Rust project
+#
+# Edit to match your needs. Run 'cidx preset list' for all available tools.
+# Run 'cidx validate' to check, 'cidx run ci' to execute.
+
+[security]
+containers = ["trivy", "gitleaks", "cargo-audit"]
+
+# The stock cargo-audit preset extracts its release tarball into
+# /usr/local/bin, but cidx runs containers as a non-root user, so every member
+# fails with "tar: <file>: Cannot open: Permission denied" and the phase dies
+# with exit 2. Same command, unpacked somewhere writable instead.
+[containers.cargo-audit]
+command = "sh -c 'curl -sSfL https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-$(uname -m)-unknown-linux-gnu-v0.22.2.tgz | tar xz --strip-components=1 -C /tmp && /tmp/cargo-audit audit'"
+
+# prettier dropped: `cidx init` auto-added it, but this repo is Rust-only and
+# its sole target is the hand-wrapped Markdown (79 cols, matching CLAUDE.md).
+# Re-add with a .prettierrc when the default theme ships CSS.
+[code]
+containers = ["clippy", "rustfmt", "commitizen"]
+
+# cargo-test covers the Rust unit tests; probatum covers behaviour (does the
+# binary DO what it claims). See CLAUDE.md — a check belongs to exactly one.
+#
+# The build is listed here on purpose, even though the build phase also has
+# one: `cidx generate github` emits every phase as a job depending only on
+# bootstrap, so phases run in PARALLEL on separate runners with no artifact
+# sharing. probatum runs the compiled binary, so the test phase has to produce
+# it. Containers within a phase run in order, so the build lands the artifact
+# before probatum looks for it.
+#
+# The build is cargo-build-musl, same as the build phase: stela ships a static
+# musl binary, so that is the artifact worth smoke-testing. See
+# .cidx/presets.toml for why static, and cidx-org/cidx#195 for the constraint
+# that probatum's Alpine image cannot execute a glibc binary anyway.
+[test]
+containers = ["cargo-build-musl", "cargo-test", "probatum"]
+
+# Static musl, not the stock cargo-build: the shipping artifact must run on any
+# Linux without a matching glibc. See .cidx/presets.toml.
+[build]
+containers = ["cargo-build-musl"]
+
+[pipelines.ci]
+phases = ["security", "code", "test", "build"]
+
+[pipelines.pr]
+phases = ["security", "code", "test"]
