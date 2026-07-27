@@ -17,14 +17,18 @@ stela serve
 ## What it will be
 
 - **One binary, zero infrastructure.** No external database, no Node at
-  runtime, no build pipeline. Your content lives in an event-sourced store on
-  disk, served memory-first by [Lithair](https://github.com/lithair/lithair).
-- **Publish instantly.** Pages are rendered server-side with
-  [Tera](https://keats.github.io/tera/) templates — no static-site rebuild
-  step. Hit publish, it's live.
+  runtime, no external build tool. One statically linked file that runs on any
+  Linux — copy it to your server and start it. Your content lives in an
+  event-sourced store on disk, served memory-first by
+  [Lithair](https://github.com/lithair/lithair).
+- **Publish instantly.** Hitting publish renders the affected pages inside the
+  binary with [Tera](https://keats.github.io/tera/) templates and puts them
+  straight into memory — no external generator, no rebuild pipeline, no
+  restart. Readers are served finished HTML, so a page view never waits on a
+  template engine.
 - **Themes are folders.** A theme is Tera templates + CSS. If you know Zola's
   template syntax, you already know how to write one. Site settings (title,
-  colors, menus) are editable from the admin and take effect immediately.
+  colors, menus) are editable from the admin and apply as soon as you save.
 - **Secure by default.** Public reads, RBAC-protected writes, sessions,
   firewall and rate limiting — inherited from Lithair, not bolted on.
 - **Headless when you want it.** The content API is plain REST; point Astro

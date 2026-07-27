@@ -11,6 +11,12 @@ on:
   pull_request:
     branches: [main]
 
+# HAND-PATCHED — `cidx generate github` emits no permissions block, so jobs
+# inherit the repository default token scope. Least privilege: nothing here
+# writes to the repo.
+permissions:
+  contents: read
+
 jobs:
   bootstrap:
     name: Bootstrap
@@ -19,6 +25,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # HAND-PATCHED — checkout persists the token in the git config by
+          # default; no step here runs an authenticated git command.
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
@@ -51,6 +60,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false   # HAND-PATCHED
       - uses: actions/download-artifact@v8
         with:
           name: cidx-binary
@@ -67,6 +77,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false   # HAND-PATCHED
       - uses: actions/download-artifact@v8
         with:
           name: cidx-binary
@@ -81,6 +92,8 @@ jobs:
     needs: [bootstrap]
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false   # HAND-PATCHED
       - uses: actions/download-artifact@v8
         with:
           name: cidx-binary
@@ -95,6 +108,8 @@ jobs:
     needs: [bootstrap]
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false   # HAND-PATCHED
       - uses: actions/download-artifact@v8
         with:
           name: cidx-binary
