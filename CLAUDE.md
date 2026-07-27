@@ -47,8 +47,9 @@ publish.
   (`frontend/assets.rs:148`), and a blog's URLs have none (`/posts/hello`), so
   every page would go out as `application/octet-stream` and download instead of
   rendering. `update_asset` offers no way to set the type. Since Stela rendered
-  the page it knows what it is, so `serve_page` sets the header itself. Worth an
-  upstream issue if a second project hits it.
+  the page it knows what it is, so `serve_page` sets the header itself. Filed as
+  [lithair#193](https://github.com/lithair/lithair/issues/193); drop the bypass
+  if an explicit MIME setter lands.
 - **Theme = a folder of Tera templates + CSS**, read at every rebuild (so a
   template edit needs a rebuild, not a restart). Pitch
   "Tera syntax, porting a Zola theme is reasonable work" — do NOT promise
@@ -174,8 +175,28 @@ then post with `gh issue create`.
   Also covers the custom-preset docs omitting `workdir`/`volumes`, and cidx
   container names not being scoped per project.
 
+- [probatum#1](https://github.com/probatum-org/probatum/issues/1) — HTTP checks
+  were GET-only, so any write path forced a drop to `run: curl`. **CLOSED**,
+  shipped as `post:` in probatum 0.2.0. cidx's preset still pins 0.1.0, hence
+  the image override in cidx.toml.
+- [probatum#2](https://github.com/probatum-org/probatum/issues/2) — a check
+  against `http://localhost:PORT` fails when `localhost` resolves to `::1` and
+  the server binds IPv4, reporting "not ready" for a healthy service. probatum
+  does not fall back to IPv4 the way curl and browsers do. probatum.yaml uses
+  `127.0.0.1` explicitly, which is better practice anyway.
+- [lithair#193](https://github.com/lithair/lithair/issues/193) — no way to set
+  an asset's MIME type, and extensionless clean URLs default to
+  octet-stream. Worked around by `serve_page`.
+
 Drop each workaround when its issue closes — that is the point of tracking
 them here rather than letting them calcify into "how stela does things".
+
+**Not an issue, a self-inflicted one worth remembering:** the musl build
+redirects `CARGO_HOME` into the workspace, so ~300 MB of crate sources sit in
+`.cargo/`. Trivy read the `Cargo.lock` files that ship *inside* those crates and
+reported advisories for versions this project does not use (aws-lc-sys 0.31.0,
+while we resolve 0.43.0). The trivy override in cidx.toml skips `.cargo` and
+`target`. Check what a scanner is actually reading before believing it.
 
 ## Commands
 
