@@ -50,6 +50,16 @@ publish.
   Lithair pattern (see lithair's rbac-session example). `SiteSettings` feeds
   the Tera context, so admin edits (title, colors, menus) apply on the next
   rebuild — which the admin triggers as part of saving.
+- **Admin lives at a per-install random route** — `/secure-xxxxxxx`, generated
+  once by `stela new` and printed for the user to write down. This is
+  defense-in-depth against drive-by scanners, NOT authentication: a URL leaks
+  through Referer headers, browser history, and proxy logs. The session/RBAC
+  gate stays mandatory behind it. Print that caveat where the route is shown,
+  so nobody treats the secret URL as the lock.
+- **One admin panel, the editor is a tab in it** — not a second "edit panel".
+  A second panel means a second route, a second auth surface and a second
+  thing to keep in sync, to buy a separation nobody has asked for yet. Split
+  only when a real need shows up.
 - **Headless stays free:** the REST content API comes with DeclarativeModel;
   an Astro/other front consuming it is an advanced path, never the default.
 - **Storage:** Lithair event store on disk (`data/`), memory-first serving.
@@ -58,8 +68,9 @@ publish.
 ## MVP scope (and non-goals)
 
 MVP: `Post` (slug, title, markdown body, published flag), `Page`,
-`SiteSettings`, admin UI behind session/RBAC, one default theme (index,
-article, page, RSS + one CSS file), markdown via `pulldown-cmark`.
+`SiteSettings`, admin UI at the random route behind session/RBAC (markdown
+editor as a tab), one default theme (index, article, page, RSS + one CSS
+file), markdown via `pulldown-cmark`.
 
 Explicit NON-goals for the MVP — add only when a real user asks: comments,
 media library/uploads, multi-theme switching, plugins, multi-author,
