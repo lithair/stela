@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ post.title }} — {{ site.title }}</title>
+    <link rel="alternate" type="application/rss+xml" title="{{ site.title }}" href="/rss.xml" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1><a href="/">{{ site.title }}</a></h1>
+    </header>
+
+    <main>
+      <article>
+        <h2>{{ post.title }}</h2>
+        {# body_html is rendered markdown, already HTML — must not be escaped #}
+        {{ post.body_html | safe }}
+      </article>
+    </main>
+
+    <footer>
+      <a href="/">← All posts</a>
+    </footer>
+  </body>
+</html>

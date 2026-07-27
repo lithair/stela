@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>{{ site.title | escape_xml }}</title>
+    <link>{{ site.base_url | safe }}/</link>
+    <description>{{ site.description | escape_xml }}</description>
+    <atom:link href="{{ site.base_url | safe }}/rss.xml" rel="self" type="application/rss+xml" />
+    {% for post in posts %}
+    <item>
+      <title>{{ post.title | escape_xml }}</title>
+      {# `safe` is earned: post.url is built in Rust from a slug that passed
+         slug_is_safe, and escape_xml would turn every "/" into "&#x2F;". #}
+      <link>{{ post.url | safe }}</link>
+      <guid isPermaLink="true">{{ post.url | safe }}</guid>
+      <pubDate>{{ post.published_rfc2822 }}</pubDate>
+      <description>{{ post.body_html | escape_xml }}</description>
+    </item>
+    {% endfor %}
+  </channel>
+</rss>

@@ -38,8 +38,17 @@ publish.
   Automatic hot-reload (write triggers rebuild with no caller) WOULD need a
   post-commit hook upstream in Lithair, which does not exist (`LifecycleAware`
   is field policies only). That hook is a v0.2 comfort, never an MVP blocker.
-  UNVERIFIED: that the event store flushes synchronously on write — if it
-  buffers, the replay misses just-written posts. Check at implementation.
+  VERIFIED 2026-07-27: the event store does flush synchronously on write. A
+  POST to `/api/posts` followed by `POST /admin/rebuild` renders the new post —
+  the throwaway handler's replay sees it. This was the architecture's main risk;
+  it is settled, and the probatum checks keep it that way.
+- **Pages are served by Stela's own route, not Lithair's `FrontendServer`.**
+  `FrontendServer` derives Content-Type from the path extension
+  (`frontend/assets.rs:148`), and a blog's URLs have none (`/posts/hello`), so
+  every page would go out as `application/octet-stream` and download instead of
+  rendering. `update_asset` offers no way to set the type. Since Stela rendered
+  the page it knows what it is, so `serve_page` sets the header itself. Worth an
+  upstream issue if a second project hits it.
 - **Theme = a folder of Tera templates + CSS**, read at every rebuild (so a
   template edit needs a rebuild, not a restart). Pitch
   "Tera syntax, porting a Zola theme is reasonable work" — do NOT promise
@@ -84,6 +93,15 @@ MVP: `Post` (slug, title, markdown body, published flag), `Page`,
 `SiteSettings`, admin UI at the random route behind session/RBAC (markdown
 editor as a tab), one default theme (index, article, page, RSS + one CSS
 file), markdown via `pulldown-cmark`.
+
+**Shipped so far:** `Post` (slug as primary key, since the slug IS the URL),
+`stela serve`, the default theme compiled into the binary, markdown via
+`pulldown-cmark`, `/`, `/posts/:slug`, `/rss.xml`, and `POST /admin/rebuild`.
+
+**The next slice is auth, and it is not optional.** `/api/posts` and
+`/admin/rebuild` are currently open to anyone who can reach the port; the binary
+says so loudly at startup. Nothing should be deployed anywhere until session +
+RBAC and the random admin route land.
 
 Explicit NON-goals for the MVP — add only when a real user asks: comments,
 media library/uploads, multi-theme switching, plugins, multi-author,

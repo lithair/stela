@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ site.title }}</title>
+    <link rel="alternate" type="application/rss+xml" title="{{ site.title }}" href="/rss.xml" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1><a href="/">{{ site.title }}</a></h1>
+      {% if site.description %}<p class="tagline">{{ site.description }}</p>{% endif %}
+    </header>
+
+    <main>
+      {% if posts %}
+        <ul class="posts">
+          {% for post in posts %}
+            <li>
+              <a href="/posts/{{ post.slug }}">{{ post.title }}</a>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">Nothing published yet.</p>
+      {% endif %}
+    </main>
+
+    <footer>
+      <a href="/rss.xml">RSS</a>
+    </footer>
+  </body>
+</html>

@@ -25,26 +25,26 @@
 
 - name: serve starts and answers
   run: ./target/x86_64-unknown-linux-musl/release/stela serve --port 3000
-  ready: http://localhost:3000/
+  ready: http://127.0.0.1:3000/
   timeout: 15
 
 - name: publishing a post is accepted
-  post: http://localhost:3000/api/posts
+  post: http://127.0.0.1:3000/api/posts
   body: '{"slug":"hello","title":"Premier post","body":"# Salut","published":true}'
   expect: 201
 
 - name: rebuild is accepted
-  post: http://localhost:3000/admin/rebuild
+  post: http://127.0.0.1:3000/admin/rebuild
   expect: 200
 
 - name: the published post is on the index
-  get: http://localhost:3000/
+  get: http://127.0.0.1:3000/
   contains: ["Premier post"]
 
 - name: the post has its own page, markdown rendered
-  get: http://localhost:3000/posts/hello
+  get: http://127.0.0.1:3000/posts/hello
   contains: ["Premier post", "<h1>Salut</h1>"]
 
 - name: the feed lists it
-  get: http://localhost:3000/rss.xml
+  get: http://127.0.0.1:3000/rss.xml
   contains: ["<rss", "Premier post", "/posts/hello"]
