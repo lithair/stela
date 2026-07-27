@@ -1,15 +1,21 @@
 # probatum checks stela's behaviour — what the binary DOES.
 # Code quality (clippy, rustfmt, audit) belongs to cidx; no overlap.
 #
-#   probatum run
+#   cargo build --release --target x86_64-unknown-linux-musl && probatum run
+#
+# Building is deliberately NOT a check here: cidx runs probatum from a minimal
+# image with no Rust toolchain (`sh: cargo: not found`), and producing the
+# artifact is a build container's job. cidx.toml puts cargo-build-musl ahead of
+# probatum inside the test phase so the binary exists when this runs.
+#
+# The musl target is not a preference: probatum's image is Alpine and cannot
+# execute a glibc binary. See .cidx/presets.toml.
 #
 # Today stela only prints its banner, so these checks are deliberately thin.
 # They grow with the product: once `stela serve` exists, this file gets the
 # service check CLAUDE.md calls for — start it, GET /, validate the RSS —
 # which is the whole reason probatum is in the stack.
 
-- run: cargo build
-
 - name: binary announces itself and exits clean
-  run: ./target/debug/stela
+  run: ./target/x86_64-unknown-linux-musl/release/stela
   contains: ["Stela", "Lithair"]

@@ -1,0 +1,28 @@
+# Project-level cidx presets.
+#
+# cargo-build-musl exists for ONE reason: cidx's `probatum` preset runs from
+# ghcr.io/probatum-org/probatum:0.1.0, which is Alpine/musl and carries no
+# glibc loader. The binary produced by the stock `cargo-build` preset
+# (rust:1.95.0) is glibc-linked, so probatum cannot execute it — and the
+# failure reads `sh: ./target/release/stela: not found` on a file that
+# demonstrably exists, which is a bad hour to spend.
+#
+# A static-pie musl binary runs in that image. Verified.
+#
+# This is scoped to the test phase on purpose. The build phase keeps the stock
+# glibc `cargo-build`: whether stela should SHIP a static musl binary is a
+# product decision (musl's allocator is slower under thread contention, which
+# matters for a memory-first server) and must not be smuggled in as a CI fix.
+
+# workdir/volumes are NOT inherited from the built-in presets and are NOT in
+# the docs' custom-preset example (docs/getting-started/configuration.md).
+# Without them the container starts in / with nothing mounted and cargo dies
+# with "could not find `Cargo.toml` in `/` or any parent directory".
+[presets.cargo-build-musl]
+name = "cargo-build-musl"
+image = "rust:1.95.0"
+command = "sh -c 'rustup target add x86_64-unknown-linux-musl && cargo build --release --target x86_64-unknown-linux-musl'"
+phase = "test"
+workdir = "/work"
+volumes = ["${WORKSPACE}:/work"]
+description = "Static musl build so probatum's Alpine image can execute the binary"
