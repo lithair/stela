@@ -1,28 +1,43 @@
 # Project-level cidx presets.
 #
-# cargo-build-musl exists for ONE reason: cidx's `probatum` preset runs from
-# ghcr.io/probatum-org/probatum:0.1.0, which is Alpine/musl and carries no
-# glibc loader. The binary produced by the stock `cargo-build` preset
-# (rust:1.95.0) is glibc-linked, so probatum cannot execute it — and the
-# failure reads `sh: ./target/release/stela: not found` on a file that
-# demonstrably exists, which is a bad hour to spend.
+# cargo-build-musl is stela's build, for both the test and build phases. The
+# release artifact is a statically linked musl binary, deliberately:
 #
-# A static-pie musl binary runs in that image. Verified.
+#   - "One binary, zero infrastructure" is the product's reason to exist. A
+#     glibc binary is already one file, but it refuses to start on any host
+#     whose glibc is older than the build's (`GLIBC_2.xx not found`). A
+#     static-pie musl binary runs on any Linux, Alpine included — which is what
+#     "copy it to your VPS and run it" actually requires, and what configorator
+#     will deploy.
+#   - It is also the only artifact cidx's probatum preset can execute: that
+#     image is Alpine/musl and has no glibc loader (cidx-org/cidx#195).
 #
-# This is scoped to the test phase on purpose. The build phase keeps the stock
-# glibc `cargo-build`: whether stela should SHIP a static musl binary is a
-# product decision (musl's allocator is slower under thread contention, which
-# matters for a memory-first server) and must not be smuggled in as a CI fix.
+# Why clux/muslrust and not cidx's stock rust image: lithair-core pulls rustls,
+# whose aws-lc-rs backend has a C component, so the build needs a musl C
+# toolchain. Installing it at runtime is not an option — cidx runs containers
+# as a non-root user and `apt-get` dies on
+# `Could not open lock file /var/lib/apt/lists/lock`. clux/muslrust ships the
+# toolchain already. Pinned to the 1.95.0 toolchain so every phase compiles
+# with the same rustc as cidx's stock rust:1.95.0 presets.
+#
+# CARGO_HOME is redirected because the image's default (/opt/cargo) is
+# root-owned and unwritable by the non-root container user. /.cargo is
+# gitignored.
+#
+# Verified against lithair-core 1.3.0: builds clean, produces static-pie, runs
+# on bare alpine.
+#
+# ponytail: musl's allocator is slower than glibc's under thread contention,
+# which is the one place this could bite a memory-first server. Not measured,
+# and not worth measuring before there is a server to measure. If throughput
+# ever disappoints, swap in jemalloc or mimalloc as the global allocator before
+# giving up on static linking.
 
-# workdir/volumes are NOT inherited from the built-in presets and are NOT in
-# the docs' custom-preset example (docs/getting-started/configuration.md).
-# Without them the container starts in / with nothing mounted and cargo dies
-# with "could not find `Cargo.toml` in `/` or any parent directory".
 [presets.cargo-build-musl]
 name = "cargo-build-musl"
-image = "rust:1.95.0"
-command = "sh -c 'rustup target add x86_64-unknown-linux-musl && cargo build --release --target x86_64-unknown-linux-musl'"
-phase = "test"
+image = "clux/muslrust:1.95.0-stable"
+command = "sh -c 'CARGO_HOME=/work/.cargo cargo build --release --target x86_64-unknown-linux-musl'"
+phase = "build"
 workdir = "/work"
 volumes = ["${WORKSPACE}:/work"]
-description = "Static musl build so probatum's Alpine image can execute the binary"
+description = "Static musl release build — stela's shipping artifact"

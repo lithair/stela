@@ -64,6 +64,19 @@ publish.
   an Astro/other front consuming it is an advanced path, never the default.
 - **Storage:** Lithair event store on disk (`data/`), memory-first serving.
   No external DB, ever — that's the product's reason to exist.
+- **The shipping artifact is a statically linked musl binary.** "One binary,
+  zero infrastructure" is not satisfied by "one file": a glibc-linked binary is
+  already one file, but refuses to start on any host whose glibc predates the
+  build's (`GLIBC_2.xx not found`). Static-pie musl runs on any Linux, Alpine
+  included, which is what "copy it to your VPS and run it" actually requires —
+  and what configorator will deploy. Built by `cargo-build-musl`
+  (`.cidx/presets.toml`), which needs `musl-tools`: lithair-core pulls rustls,
+  whose aws-lc-rs backend has a C component. Verified against lithair-core
+  1.3.0 — builds clean, static-pie, runs on bare alpine.
+  Known cost: musl's allocator is slower than glibc's under thread contention.
+  Unmeasured, and not worth measuring before there is a server to measure. If
+  throughput ever disappoints, reach for jemalloc or mimalloc as the global
+  allocator before abandoning static linking.
 
 ## MVP scope (and non-goals)
 

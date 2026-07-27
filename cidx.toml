@@ -30,13 +30,17 @@ containers = ["clippy", "rustfmt", "commitizen"]
 # it. Containers within a phase run in order, so the build lands the artifact
 # before probatum looks for it.
 #
-# It is cargo-build-musl and not cargo-build because probatum's image cannot
-# execute a glibc binary — see .cidx/presets.toml for the full story.
+# The build is cargo-build-musl, same as the build phase: stela ships a static
+# musl binary, so that is the artifact worth smoke-testing. See
+# .cidx/presets.toml for why static, and cidx-org/cidx#195 for the constraint
+# that probatum's Alpine image cannot execute a glibc binary anyway.
 [test]
 containers = ["cargo-build-musl", "cargo-test", "probatum"]
 
+# Static musl, not the stock cargo-build: the shipping artifact must run on any
+# Linux without a matching glibc. See .cidx/presets.toml.
 [build]
-containers = ["cargo-build"]
+containers = ["cargo-build-musl"]
 
 [pipelines.ci]
 phases = ["security", "code", "test", "build"]
