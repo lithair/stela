@@ -23,11 +23,20 @@ jobs:
         with:
           go-version: "1.26"
           cache: true
+      # HAND-PATCHED — `cidx generate github` emits
+      #   go install github.com/cidx-org/cidx/cmd/cidx@latest
+      # which silently installs v1.8.0: cidx's go.mod declares
+      # `module github.com/cidx-org/cidx` with no /v2 suffix, so Go cannot see
+      # any v2.x tag (`go list -m -versions` stops at v1.8.0) and pinning
+      # @v2.1.1 is refused outright. v1.8.0 has no probatum preset and a
+      # rustfmt preset missing `rustup component add`, which is exactly how
+      # this workflow failed. Build from source until that is fixed upstream.
+      # Re-apply this block after every `cidx generate github`.
       - name: Install CIDX
         run: |
           mkdir -p bin
-          go install github.com/cidx-org/cidx/cmd/cidx@latest
-          cp "$(go env GOPATH)/bin/cidx" bin/cidx
+          git clone --depth 1 --branch v2.1.1 https://github.com/cidx-org/cidx /tmp/cidx
+          cd /tmp/cidx && go build -o "$GITHUB_WORKSPACE/bin/cidx" ./cmd/cidx
       - uses: actions/upload-artifact@v7
         with:
           name: cidx-binary
