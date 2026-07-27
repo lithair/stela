@@ -8,14 +8,43 @@
 # artifact is a build container's job. cidx.toml puts cargo-build-musl ahead of
 # probatum inside the test phase so the binary exists when this runs.
 #
-# The musl target is not a preference: probatum's image is Alpine and cannot
-# execute a glibc binary. See .cidx/presets.toml.
+# The musl target is not a preference: it is what stela ships, and probatum's
+# image is Alpine and could not execute a glibc binary anyway.
+# See .cidx/presets.toml and cidx-org/cidx#195.
 #
-# Today stela only prints its banner, so these checks are deliberately thin.
-# They grow with the product: once `stela serve` exists, this file gets the
-# service check CLAUDE.md calls for — start it, GET /, validate the RSS —
-# which is the whole reason probatum is in the stack.
+# THESE CHECKS ARE RED ON PURPOSE. They were written before the code, and they
+# are the definition of the first slice: a post published through the API shows
+# up on the index, on its own page, and in the feed — without a restart.
+# They exercise the three things the architecture bets on:
+#   1. a rebuild triggered by a plain route, no Lithair change needed;
+#   2. update_asset() making a page visible immediately;
+#   3. CLAUDE.md's UNVERIFIED assumption — that the event store flushes to disk
+#      synchronously on write. If it buffers, the throwaway handler replays a
+#      log that does not have the post yet and the index check fails while the
+#      POST passes. That failure mode is the whole reason to write these first.
 
-- name: binary announces itself and exits clean
-  run: ./target/x86_64-unknown-linux-musl/release/stela
-  contains: ["Stela", "Lithair"]
+- name: serve starts and answers
+  run: ./target/x86_64-unknown-linux-musl/release/stela serve --port 3000
+  ready: http://localhost:3000/
+  timeout: 15
+
+- name: publishing a post is accepted
+  post: http://localhost:3000/api/posts
+  body: '{"slug":"hello","title":"Premier post","body":"# Salut","published":true}'
+  expect: 201
+
+- name: rebuild is accepted
+  post: http://localhost:3000/admin/rebuild
+  expect: 200
+
+- name: the published post is on the index
+  get: http://localhost:3000/
+  contains: ["Premier post"]
+
+- name: the post has its own page, markdown rendered
+  get: http://localhost:3000/posts/hello
+  contains: ["Premier post", "<h1>Salut</h1>"]
+
+- name: the feed lists it
+  get: http://localhost:3000/rss.xml
+  contains: ["<rss", "Premier post", "/posts/hello"]

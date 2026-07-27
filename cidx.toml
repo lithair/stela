@@ -37,6 +37,13 @@ containers = ["clippy", "rustfmt", "commitizen"]
 [test]
 containers = ["cargo-build-musl", "cargo-test", "probatum"]
 
+# cidx's probatum preset still points at 0.1.0, whose HTTP check is GET-only.
+# probatum 0.2.0 added `post:` with body/headers (probatum-org/probatum#1,
+# closed), which probatum.yaml now uses — so the image has to move with it.
+# Drop this override once the preset catches up.
+[containers.probatum]
+image = "ghcr.io/probatum-org/probatum:0.2.0"
+
 # Static musl, not the stock cargo-build: the shipping artifact must run on any
 # Linux without a matching glibc. See .cidx/presets.toml.
 [build]
