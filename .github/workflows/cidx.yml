@@ -11,9 +11,6 @@ on:
   pull_request:
     branches: [main]
 
-# HAND-PATCHED — `cidx generate github` emits no permissions block, so jobs
-# inherit the repository default token scope. Least privilege: nothing here
-# writes to the repo.
 permissions:
   contents: read
 
@@ -25,27 +22,16 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # HAND-PATCHED — checkout persists the token in the git config by
-          # default; no step here runs an authenticated git command.
           persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
           cache: true
-      # HAND-PATCHED — `cidx generate github` emits
-      #   go install github.com/cidx-org/cidx/cmd/cidx@latest
-      # which silently installs v1.8.0: cidx's go.mod declares
-      # `module github.com/cidx-org/cidx` with no /v2 suffix, so Go cannot see
-      # any v2.x tag (`go list -m -versions` stops at v1.8.0) and pinning
-      # @v2.1.1 is refused outright. v1.8.0 has no probatum preset and a
-      # rustfmt preset missing `rustup component add`, which is exactly how
-      # this workflow failed. Build from source until that is fixed upstream.
-      # Re-apply this block after every `cidx generate github`.
       - name: Install CIDX
         run: |
           mkdir -p bin
-          git clone --depth 1 --branch v2.1.1 https://github.com/cidx-org/cidx /tmp/cidx
-          cd /tmp/cidx && go build -o "$GITHUB_WORKSPACE/bin/cidx" ./cmd/cidx
+          go install github.com/cidx-org/cidx/v3/cmd/cidx@v3.2.0
+          cp "$(go env GOPATH)/bin/cidx" bin/cidx
       - uses: actions/upload-artifact@v7
         with:
           name: cidx-binary
@@ -60,7 +46,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          persist-credentials: false   # HAND-PATCHED
+          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           name: cidx-binary
@@ -77,7 +63,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          persist-credentials: false   # HAND-PATCHED
+          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           name: cidx-binary
@@ -93,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          persist-credentials: false   # HAND-PATCHED
+          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           name: cidx-binary
@@ -109,7 +95,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          persist-credentials: false   # HAND-PATCHED
+          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           name: cidx-binary

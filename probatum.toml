@@ -1,0 +1,48 @@
+# probatum checks stela's behaviour — what the binary DOES.
+# Code quality (clippy, rustfmt, audit) belongs to cidx; no overlap.
+#
+#   cargo build --release --target x86_64-unknown-linux-musl && probatum run
+#
+# Building is deliberately NOT a check here: cidx runs probatum from a minimal
+# image with no Rust toolchain, and producing the artifact is a build
+# container's job. cidx.toml puts cargo-build-musl ahead of probatum inside the
+# test phase so the binary exists when this runs.
+#
+# The musl target is not a preference: it is what stela ships, and probatum's
+# image is Alpine and could not execute a glibc binary anyway.
+#
+# 127.0.0.1 rather than localhost is deliberate — stela binds IPv4 by default,
+# and naming the address a check targets beats relying on resolver order
+# (probatum-org/probatum#2).
+
+[[check]]
+name = "serve starts and answers"
+run = "./target/x86_64-unknown-linux-musl/release/stela serve --port 3000"
+ready = "http://127.0.0.1:3000/"
+timeout = 15
+
+[[check]]
+name = "publishing a post is accepted"
+post = "http://127.0.0.1:3000/api/posts"
+body = '{"slug":"hello","title":"Premier post","body":"# Salut","published":true}'
+expect = 201
+
+[[check]]
+name = "rebuild is accepted"
+post = "http://127.0.0.1:3000/admin/rebuild"
+expect = 200
+
+[[check]]
+name = "the published post is on the index"
+get = "http://127.0.0.1:3000/"
+contains = ["Premier post"]
+
+[[check]]
+name = "the post has its own page, markdown rendered"
+get = "http://127.0.0.1:3000/posts/hello"
+contains = ["Premier post", "<h1>Salut</h1>"]
+
+[[check]]
+name = "the feed lists it"
+get = "http://127.0.0.1:3000/rss.xml"
+contains = ["<rss", "Premier post", "/posts/hello"]

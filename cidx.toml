@@ -21,13 +21,6 @@ containers = ["trivy", "gitleaks", "cargo-audit"]
 [containers.trivy]
 command = "fs --skip-dirs .cargo --skip-dirs target /work"
 
-# The stock cargo-audit preset extracts its release tarball into
-# /usr/local/bin, but cidx runs containers as a non-root user, so every member
-# fails with "tar: <file>: Cannot open: Permission denied" and the phase dies
-# with exit 2. Same command, unpacked somewhere writable instead.
-[containers.cargo-audit]
-command = "sh -c 'curl -sSfL https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-$(uname -m)-unknown-linux-gnu-v0.22.2.tgz | tar xz --strip-components=1 -C /tmp && /tmp/cargo-audit audit'"
-
 # prettier dropped: `cidx init` auto-added it, but this repo is Rust-only and
 # its sole target is the hand-wrapped Markdown (79 cols, matching CLAUDE.md).
 # Re-add with a .prettierrc when the default theme ships CSS.
@@ -44,19 +37,11 @@ containers = ["clippy", "rustfmt", "commitizen"]
 # it. Containers within a phase run in order, so the build lands the artifact
 # before probatum looks for it.
 #
-# The build is cargo-build-musl, same as the build phase: stela ships a static
-# musl binary, so that is the artifact worth smoke-testing. See
-# .cidx/presets.toml for why static, and cidx-org/cidx#195 for the constraint
-# that probatum's Alpine image cannot execute a glibc binary anyway.
+# It is cargo-build-musl, same as the build phase: stela ships a static musl
+# binary, so that is the artifact worth smoke-testing — and probatum's image is
+# Alpine, which could not execute a glibc one anyway.
 [test]
 containers = ["cargo-build-musl", "cargo-test", "probatum"]
-
-# cidx's probatum preset still points at 0.1.0, whose HTTP check is GET-only.
-# probatum 0.2.0 added `post:` with body/headers (probatum-org/probatum#1,
-# closed), which probatum.yaml now uses — so the image has to move with it.
-# Drop this override once the preset catches up.
-[containers.probatum]
-image = "ghcr.io/probatum-org/probatum:0.2.0"
 
 # Static musl, not the stock cargo-build: the shipping artifact must run on any
 # Linux without a matching glibc. See .cidx/presets.toml.
