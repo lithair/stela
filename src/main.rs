@@ -19,13 +19,21 @@ use std::sync::Arc;
 
 type Resp = Response<BoxBody<Bytes, Infallible>>;
 
+/// Content types for the assets we render. Stated explicitly rather than
+/// inferred: a blog's URLs have no extension (`/posts/hello`), and asset MIME
+/// detection has nothing else to go on.
+const HTML: &str = "text/html; charset=utf-8";
+const XML: &str = "application/xml; charset=utf-8";
+const CSS: &str = "text/css; charset=utf-8";
+
 /// The default theme, compiled in. A theme is a folder of Tera templates + CSS;
 /// this one ships inside the binary so `stela serve` needs nothing beside it —
 /// that is what "copy one file to your server" requires. Loading a theme from
 /// disk to override these comes with the admin, not before.
-const THEME: [(&str, &str); 3] = [
+const THEME: [(&str, &str); 4] = [
     ("index.html", include_str!("../theme/index.html")),
     ("post.html", include_str!("../theme/post.html")),
+    ("404.html", include_str!("../theme/404.html")),
     ("rss.xml", include_str!("../theme/rss.xml")),
 ];
 const STYLE_CSS: &str = include_str!("../theme/style.css");
@@ -115,7 +123,7 @@ async fn main() -> Result<()> {
 
     // The stylesheet never changes between rebuilds, so it is pushed once.
     engine
-        .update_asset("/style.css", STYLE_CSS.as_bytes().to_vec())
+        .update_asset_with_mime("/style.css", STYLE_CSS.as_bytes().to_vec(), CSS)
         .await?;
 
     // Render before serving: `/` has to answer 200 from the first request, even
@@ -221,10 +229,21 @@ async fn rebuild(engine: &FrontendEngine, posts_dir: &str, site: &Site) -> Resul
     ctx.insert("posts", &posts);
 
     engine
-        .update_asset("/index.html", tera.render("index.html", &ctx)?.into_bytes())
+        .update_asset_with_mime(
+            "/index.html",
+            tera.render("index.html", &ctx)?.into_bytes(),
+            HTML,
+        )
         .await?;
     engine
-        .update_asset("/rss.xml", tera.render("rss.xml", &ctx)?.into_bytes())
+        .update_asset_with_mime(
+            "/404.html",
+            tera.render("404.html", &ctx)?.into_bytes(),
+            HTML,
+        )
+        .await?;
+    engine
+        .update_asset_with_mime("/rss.xml", tera.render("rss.xml", &ctx)?.into_bytes(), XML)
         .await?;
 
     for post in &posts {
@@ -233,7 +252,7 @@ async fn rebuild(engine: &FrontendEngine, posts_dir: &str, site: &Site) -> Resul
         let slug = post["slug"].as_str().unwrap_or_default();
         let html = tera.render("post.html", &page)?;
         engine
-            .update_asset(&format!("/posts/{slug}"), html.into_bytes())
+            .update_asset_with_mime(&format!("/posts/{slug}"), html.into_bytes(), HTML)
             .await?;
     }
 
@@ -270,37 +289,38 @@ fn markdown_to_html(markdown: &str) -> String {
 
 /// Serve a rendered page out of memory.
 ///
-/// Lithair's FrontendServer is bypassed here for one reason: it derives the
-/// Content-Type from the path extension, and a blog's URLs have none
-/// (`/posts/hello`), so every page would go out as application/octet-stream and
-/// download instead of rendering. `update_asset` offers no way to set the type.
-/// Since we rendered these pages, we know what they are, so we say so.
+/// Since lithair-core 1.4 the MIME type travels with the asset
+/// (`update_asset_with_mime`), so this no longer has to guess it — that was the
+/// original reason to bypass `FrontendServer` (lithair#193, closed).
+///
+/// What still keeps this function alive is the 404: `FrontendServer` answers a
+/// miss with a hardcoded neon-green terminal page, which is fine for a framework
+/// demo and wrong for someone's blog. A reader who mistypes a URL should land on
+/// the site's own design. Filed upstream — once `FrontendServer` will serve a
+/// `/404.html` asset when one exists, this whole function goes away.
 async fn serve_page(req: Request<hyper::body::Incoming>, engine: &FrontendEngine) -> Resp {
     let path = match req.uri().path() {
         "" | "/" => "/index.html",
         p => p,
     };
 
-    match engine.get_asset(path).await {
+    let (status, asset) = match engine.get_asset(path).await {
+        Some(asset) => (StatusCode::OK, Some(asset)),
+        None => (StatusCode::NOT_FOUND, engine.get_asset("/404.html").await),
+    };
+
+    match asset {
         Some(asset) => Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", content_type(path))
+            .status(status)
+            .header("Content-Type", asset.mime_type)
             .body(Full::new(Bytes::from(asset.content)).boxed())
-            .expect("response builder cannot fail on a static header set"),
+            .expect("response builder cannot fail on a header taken from a stored asset"),
+        // Only reachable before the first rebuild has stored the theme's page.
         None => Response::builder()
             .status(StatusCode::NOT_FOUND)
-            .header("Content-Type", "text/html; charset=utf-8")
+            .header("Content-Type", HTML)
             .body(Full::new(Bytes::from("<h1>404</h1>")).boxed())
             .expect("response builder cannot fail on a static header set"),
-    }
-}
-
-fn content_type(path: &str) -> &'static str {
-    match path.rsplit('.').next() {
-        Some("css") => "text/css; charset=utf-8",
-        Some("xml") => "application/xml; charset=utf-8",
-        // Everything else we store is a rendered page, extension or not.
-        _ => "text/html; charset=utf-8",
     }
 }
 
@@ -320,15 +340,6 @@ mod tests {
     fn markdown_becomes_html() {
         assert_eq!(markdown_to_html("# Salut").trim(), "<h1>Salut</h1>");
         assert!(markdown_to_html("a **bold** word").contains("<strong>bold</strong>"));
-    }
-
-    #[test]
-    fn extensionless_post_urls_are_served_as_html() {
-        // The whole reason serve_page exists rather than FrontendServer.
-        assert_eq!(content_type("/posts/hello"), "text/html; charset=utf-8");
-        assert_eq!(content_type("/index.html"), "text/html; charset=utf-8");
-        assert_eq!(content_type("/rss.xml"), "application/xml; charset=utf-8");
-        assert_eq!(content_type("/style.css"), "text/css; charset=utf-8");
     }
 
     #[test]
@@ -354,6 +365,6 @@ mod tests {
         let tera = theme().expect("bundled theme must always parse");
         let mut names: Vec<_> = tera.get_template_names().collect();
         names.sort_unstable();
-        assert_eq!(names, ["index.html", "post.html", "rss.xml"]);
+        assert_eq!(names, ["404.html", "index.html", "post.html", "rss.xml"]);
     }
 }
