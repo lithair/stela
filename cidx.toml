@@ -43,6 +43,14 @@ containers = ["clippy", "rustfmt", "commitizen"]
 [test]
 containers = ["cargo-build-musl", "cargo-test", "probatum"]
 
+# cidx pins preset images by digest, which is right, but it means each probatum
+# release needs a bump commit upstream. probatum.toml relies on the cookie jar
+# that shipped in 0.9.0 (probatum-org/probatum#5) and cidx's preset is still on
+# 0.8.0, so the image moves here. The probatum repo overrides its own preset the
+# same way. Drop this when cidx bumps.
+[containers.probatum]
+image = "ghcr.io/probatum-org/probatum:0.9.0"
+
 # Static musl, not the stock cargo-build: the shipping artifact must run on any
 # Linux without a matching glibc. See .cidx/presets.toml.
 [build]

@@ -16,11 +16,12 @@
 # (probatum-org/probatum#2).
 #
 # ── the auth slice, written before the code ────────────────────────────────
-# Everything below "public reads stay public" is RED on purpose. It is the
-# contract for the next slice: reads stay open to the world, every write is
-# refused without a session, and the admin panel lives at a route the operator
-# chose. The negative space is most of the security value and all of it is
-# assertable today.
+# RED on purpose. The order matters twice over: probatum stops at the first
+# failure, and the cookie jar (0.9.0, probatum-org/probatum#5) accumulates
+# across the run — so everything above "logging in" is genuinely anonymous,
+# and everything below it is genuinely authenticated. The last check logs out
+# and retries a write, which is what proves the session was doing the work
+# rather than the endpoint being open all along.
 
 [[check]]
 name = "serve starts and answers"
@@ -53,11 +54,6 @@ name = "rebuilding without a session is refused"
 post = "http://127.0.0.1:3000/admin/rebuild"
 expect = 401
 
-[[check]]
-name = "a refused post did not reach the store"
-get = "http://127.0.0.1:3000/posts/sneaky"
-expect = 404
-
 # ── the admin panel is behind both the route and the session ───────────────
 
 [[check]]
@@ -79,22 +75,61 @@ body = '{"username":"editor","password":"wrong"}'
 expect = 401
 
 [[check]]
-name = "good credentials return a session token"
+name = "good credentials open a session"
 post = "http://127.0.0.1:3000/auth/login"
 body = '{"username":"editor","password":"hunter2"}'
 expect = 200
-contains = ["token"]
 
-# ── NOT HERE, AND IT IS A GAP ──────────────────────────────────────────────
-# The authenticated round trip — log in, publish, rebuild, see the post on the
-# index — is the check that actually proves the product works, and it is the
-# one probatum cannot express. Its HTTP client is a deliberately minimal
-# hand-rolled HTTP/1.1 over TcpStream: no cookie jar, and no way to carry a
-# value from one check's response into a later check's headers. `headers` is a
-# static table.
-#
-# So the six round-trip checks that were green before this slice cannot survive
-# it. Filed as probatum-org/probatum#5 (a cookie jar for the run would be
-# enough). Until it lands the round trip lives in a Rust integration test —
-# tests/authenticated_publish.rs — so nobody reads this file later and concludes
-# the product was never verified end to end. Move it back here when #5 ships.
+# ── authenticated from here: the jar replays the session cookie ────────────
+
+[[check]]
+name = "the admin panel opens with a session"
+get = "http://127.0.0.1:3000/secure-testroute"
+expect = 200
+
+[[check]]
+name = "a logged-in editor can publish"
+post = "http://127.0.0.1:3000/api/posts"
+body = '{"slug":"hello","title":"Premier post","body":"# Salut","published":true}'
+expect = 201
+
+[[check]]
+name = "a logged-in editor can rebuild"
+post = "http://127.0.0.1:3000/admin/rebuild"
+expect = 200
+
+[[check]]
+name = "the published post is on the index"
+get = "http://127.0.0.1:3000/"
+contains = ["Premier post"]
+
+[[check]]
+name = "the post has its own page, markdown rendered"
+get = "http://127.0.0.1:3000/posts/hello"
+contains = ["Premier post", "<h1>Salut</h1>"]
+
+[[check]]
+name = "the feed lists it"
+get = "http://127.0.0.1:3000/rss.xml"
+contains = ["<rss", "Premier post", "/posts/hello"]
+
+# The anonymous POST above was refused; this proves it was refused BEFORE the
+# write, not merely unrendered. A rebuild has just run, so a stored post would
+# have a page by now.
+[[check]]
+name = "the refused post never reached the store"
+get = "http://127.0.0.1:3000/posts/sneaky"
+expect = 404
+
+# ── and the session is what was doing the work ─────────────────────────────
+
+[[check]]
+name = "logging out ends the session"
+post = "http://127.0.0.1:3000/auth/logout"
+expect = 200
+
+[[check]]
+name = "publishing after logout is refused again"
+post = "http://127.0.0.1:3000/api/posts"
+body = '{"slug":"after-logout","title":"Nope","body":"x","published":true}'
+expect = 401

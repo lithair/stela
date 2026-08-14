@@ -181,20 +181,19 @@ Closed and shipped, nothing left in this repo:
 - [probatum#1](https://github.com/probatum-org/probatum/issues/1) — HTTP checks
   were GET-only, forcing `run: curl` for any write. Shipped as `post` in 0.2.0.
 
-Still open:
 - [probatum#5](https://github.com/probatum-org/probatum/issues/5) — nothing
-  carries from one check to the next (no cookie jar, `headers` is a static
-  table), so an authenticated sequence — log in, then do the thing that needed
-  logging in — cannot be expressed. **This bends the division of labour on
-  purpose:** the authenticated round trip lives in a Rust integration test
-  (`tests/authenticated_publish.rs`) instead of probatum. Move it back when #5
-  ships. probatum still owns the whole negative space, which is most of the
-  security value.
-
-Closed since:
+  carried from one check to the next, so an authenticated sequence could not be
+  expressed. Shipped as a per-run cookie jar in 0.9.0. The division of labour
+  never had to bend: the authenticated round trip stayed in `probatum.toml` and
+  the Rust integration test was never written.
 - [lithair#193](https://github.com/lithair/lithair/issues/193) — no way to set
   an asset's MIME type; extensionless clean URLs defaulted to octet-stream.
   Fixed by `update_asset_with_mime` in lithair-core 1.4.0.
+
+**Preset images are pinned by digest upstream, so they lag by design.** cidx
+bumps its `probatum` preset one commit per probatum release; between the two,
+override the image in `cidx.toml` (the probatum repo does the same in its own
+`.cidx/presets.toml`). Currently overridden to 0.9.0 for the cookie jar.
 
 Closed but the practice stays because it is better anyway:
 - [probatum#2](https://github.com/probatum-org/probatum/issues/2) — checks
