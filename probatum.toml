@@ -14,35 +14,87 @@
 # 127.0.0.1 rather than localhost is deliberate — stela binds IPv4 by default,
 # and naming the address a check targets beats relying on resolver order
 # (probatum-org/probatum#2).
+#
+# ── the auth slice, written before the code ────────────────────────────────
+# Everything below "public reads stay public" is RED on purpose. It is the
+# contract for the next slice: reads stay open to the world, every write is
+# refused without a session, and the admin panel lives at a route the operator
+# chose. The negative space is most of the security value and all of it is
+# assertable today.
 
 [[check]]
 name = "serve starts and answers"
-run = "./target/x86_64-unknown-linux-musl/release/stela serve --port 3000"
+run = "STELA_ADMIN_PASSWORD=hunter2 ./target/x86_64-unknown-linux-musl/release/stela serve --port 3000 --admin-route /secure-testroute --admin-user editor"
 ready = "http://127.0.0.1:3000/"
 timeout = 15
 
-[[check]]
-name = "publishing a post is accepted"
-post = "http://127.0.0.1:3000/api/posts"
-body = '{"slug":"hello","title":"Premier post","body":"# Salut","published":true}'
-expect = 201
+# ── public reads stay public ───────────────────────────────────────────────
 
 [[check]]
-name = "rebuild is accepted"
-post = "http://127.0.0.1:3000/admin/rebuild"
+name = "the index is readable without a session"
+get = "http://127.0.0.1:3000/"
 expect = 200
 
 [[check]]
-name = "the published post is on the index"
-get = "http://127.0.0.1:3000/"
-contains = ["Premier post"]
-
-[[check]]
-name = "the post has its own page, markdown rendered"
-get = "http://127.0.0.1:3000/posts/hello"
-contains = ["Premier post", "<h1>Salut</h1>"]
-
-[[check]]
-name = "the feed lists it"
+name = "the feed is readable without a session"
 get = "http://127.0.0.1:3000/rss.xml"
-contains = ["<rss", "Premier post", "/posts/hello"]
+expect = 200
+
+# ── every write is refused without a session ───────────────────────────────
+
+[[check]]
+name = "publishing without a session is refused"
+post = "http://127.0.0.1:3000/api/posts"
+body = '{"slug":"sneaky","title":"Nope","body":"x","published":true}'
+expect = 401
+
+[[check]]
+name = "rebuilding without a session is refused"
+post = "http://127.0.0.1:3000/admin/rebuild"
+expect = 401
+
+[[check]]
+name = "a refused post did not reach the store"
+get = "http://127.0.0.1:3000/posts/sneaky"
+expect = 404
+
+# ── the admin panel is behind both the route and the session ───────────────
+
+[[check]]
+name = "the admin route is not guessable"
+get = "http://127.0.0.1:3000/secure-wrongroute"
+expect = 404
+
+[[check]]
+name = "the admin route still demands a session"
+get = "http://127.0.0.1:3000/secure-testroute"
+expect = 401
+
+# ── logging in ─────────────────────────────────────────────────────────────
+
+[[check]]
+name = "bad credentials are refused"
+post = "http://127.0.0.1:3000/auth/login"
+body = '{"username":"editor","password":"wrong"}'
+expect = 401
+
+[[check]]
+name = "good credentials return a session token"
+post = "http://127.0.0.1:3000/auth/login"
+body = '{"username":"editor","password":"hunter2"}'
+expect = 200
+contains = ["token"]
+
+# ── NOT HERE, AND IT IS A GAP ──────────────────────────────────────────────
+# The authenticated round trip — log in, publish, rebuild, see the post on the
+# index — is the check that actually proves the product works, and it is the
+# one probatum cannot express. Its HTTP client is a deliberately minimal
+# hand-rolled HTTP/1.1 over TcpStream: no cookie jar, and no way to carry a
+# value from one check's response into a later check's headers. `headers` is a
+# static table.
+#
+# So the six round-trip checks that were green before this slice cannot survive
+# it. Filed as probatum-org/probatum#5 (a cookie jar for the run would be
+# enough). Until it lands the round trip lives in a Rust integration test —
+# tests/authenticated_publish.rs — so nobody reads this file later and concludes
+# the product was never verified end to end. Move it back here when #5 ships.
