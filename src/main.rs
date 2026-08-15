@@ -32,11 +32,12 @@ const CSS: &str = "text/css; charset=utf-8";
 /// this one ships inside the binary so `stela serve` needs nothing beside it —
 /// that is what "copy one file to your server" requires. Loading a theme from
 /// disk to override these comes with the admin, not before.
-const THEME: [(&str, &str); 5] = [
+const THEME: [(&str, &str); 6] = [
     ("index.html", include_str!("../theme/index.html")),
     ("post.html", include_str!("../theme/post.html")),
     ("404.html", include_str!("../theme/404.html")),
     ("admin.html", include_str!("../theme/admin.html")),
+    ("login.html", include_str!("../theme/login.html")),
     ("rss.xml", include_str!("../theme/rss.xml")),
 ];
 const STYLE_CSS: &str = include_str!("../theme/style.css");
@@ -200,6 +201,8 @@ async fn main() -> Result<()> {
     let login_sessions = sessions.clone();
     let logout_sessions = sessions.clone();
     let login_user = admin_user.clone();
+    let login_site = site.clone();
+    let login_route = admin_route.clone();
     let admin_site = site.clone();
     let admin_dir = posts_dir.clone();
     let admin_route_for_page = admin_route.clone();
@@ -227,7 +230,10 @@ async fn main() -> Result<()> {
             format!("{admin_route}/*"),
             RouteGuard::RequireAuth {
                 redirect_to: None,
-                exclude: vec![],
+                // The login page and the login itself are the only things under
+                // the prefix that must answer without a session — they are how
+                // a session is obtained. Everything else stays shut.
+                exclude: vec![format!("{admin_route}/login")],
             },
         )
         // Lithair ships a dashboard and a data admin. Building a blog on this
@@ -238,28 +244,33 @@ async fn main() -> Result<()> {
         .with_admin_auth(true)
         .with_admin_path(format!("{admin_route}/panel"))
         .with_data_admin_ui(format!("{admin_route}/data"))
-        // Rate limiting scoped to /auth/ and nothing else. That is the only
-        // endpoint an anonymous caller can write to, so it is the only one a
-        // wordlist can be pointed at; everything else already needs a session.
-        // Public reads stay outside it — a blog that throttles readers has
-        // misunderstood what it is for — and so does the admin prefix, where
-        // throttling a logged-in editor buys nothing and costs page loads.
+        // The login is the only endpoint in the binary that answers without a
+        // session, and it now sits behind the secret prefix like everything
+        // else — so this limit applies to someone who already knows the prefix.
+        // That is what makes it defence in depth rather than the front door.
+        // Public reads stay outside it: a blog that throttles readers has
+        // misunderstood what it is for.
         .with_firewall_config(FirewallConfig {
             enabled: true,
             allow: Default::default(),
             deny: Default::default(),
             global_qps: None,
             per_ip_qps: Some(LOGIN_QPS),
-            protected_prefixes: vec!["/auth/".to_string()],
+            protected_prefixes: vec![format!("{admin_route}/login")],
             exempt_prefixes: vec![],
         })
-        .with_route(Method::POST, "/auth/login".to_string(), move |req| {
+        .with_route(Method::GET, format!("{admin_route}/login"), move |_req| {
+            let site = login_site.clone();
+            let route = login_route.clone();
+            Box::pin(async move { Ok(html(StatusCode::OK, login_html(&site, &route))) })
+        })
+        .with_route(Method::POST, format!("{admin_route}/login"), move |req| {
             let store = login_sessions.clone();
             let user = login_user.clone();
             let hash = admin_password_hash.clone();
             Box::pin(async move { Ok(login(req, store, &user, &hash).await) })
         })
-        .with_route(Method::POST, "/auth/logout".to_string(), move |req| {
+        .with_route(Method::POST, format!("{admin_route}/logout"), move |req| {
             let store = logout_sessions.clone();
             Box::pin(async move { Ok(logout(req, store).await) })
         })
@@ -598,6 +609,20 @@ fn posts_as_script_json(posts: &[Post]) -> String {
         .replace("</", "<\\/")
 }
 
+/// The sign-in page. The only page in the binary served without a session, and
+/// only to someone who already knows the prefix.
+fn login_html(site: &Site, admin_route: &str) -> String {
+    let mut ctx = tera::Context::new();
+    ctx.insert("site", site);
+    ctx.insert("admin_route", admin_route);
+    theme()
+        .and_then(|t| t.render("login.html", &ctx).map_err(Into::into))
+        .unwrap_or_else(|e| {
+            log::error!("the bundled login template failed to render: {e}");
+            "<h1>Sign in unavailable</h1>".to_string()
+        })
+}
+
 fn html(status: StatusCode, body: String) -> Resp {
     Response::builder()
         .status(status)
@@ -671,6 +696,7 @@ mod tests {
                 "404.html",
                 "admin.html",
                 "index.html",
+                "login.html",
                 "post.html",
                 "rss.xml"
             ]

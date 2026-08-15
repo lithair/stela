@@ -112,7 +112,7 @@
 
       document.getElementById("logout").addEventListener("click", async (e) => {
         e.preventDefault();
-        await fetch("/auth/logout", { method: "POST" });
+        await fetch("{{ admin_route }}/logout", { method: "POST" });
         location.href = "/";
       });
     </script>

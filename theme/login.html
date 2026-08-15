@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign in — {{ site.title }}</title>
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1><a href="/">{{ site.title }}</a></h1>
+      <p class="tagline">Sign in</p>
+    </header>
+
+    <main>
+      <form id="login" class="editor">
+        <label>
+          Username
+          <input name="username" autocomplete="username" required autofocus />
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <button type="submit">Sign in</button>
+        <p id="status" class="empty" role="status"></p>
+      </form>
+    </main>
+
+    <footer>
+      <a href="/">← Back to the blog</a>
+    </footer>
+
+    <script>
+      const form = document.getElementById("login");
+      const status = document.getElementById("status");
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        status.textContent = "Signing in…";
+        const res = await fetch("{{ admin_route }}/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            username: form.username.value,
+            password: form.password.value,
+          }),
+        });
+        if (res.ok) {
+          location.href = "{{ admin_route }}";
+          return;
+        }
+        // Deliberately vague, and deliberately not slower or faster for a wrong
+        // username than a wrong password — see the login handler.
+        status.textContent =
+          res.status === 429
+            ? "Too many attempts. Wait a moment."
+            : "Those credentials were refused.";
+        form.password.value = "";
+      });
+    </script>
+  </body>
+</html>

@@ -67,8 +67,13 @@ publish.
   day. Stela is the opposite: the editor, the rebuild, Lithair's dashboard and
   the data admin all hang off one per-install prefix
   (`/secure-xxxxxxx/…`), so a scanner finds nothing to even authenticate
-  against. `/admin`, `/wp-admin` and the framework's own default paths return
-  404, and there are checks that say so.
+  against. `/admin`, `/wp-admin`, `/login`, `/auth/login` and the framework's
+  own default paths return 404, and there are checks that say so.
+  **The login moved under the prefix too, and that was the point.** Leaving it
+  at a fixed path left exactly one unauthenticated oracle anyone could point a
+  wordlist at while knowing nothing — the wp-admin shape, rebuilt. Now the only
+  endpoint that answers without a session is `<prefix>/login`, reachable solely
+  by someone who already has the prefix.
   The secret prefix is defence in depth, NOT authentication — a URL leaks
   through Referer headers, browser history and proxy logs — so the session gate
   behind it stays mandatory, and the startup banner says exactly that where the
@@ -83,9 +88,9 @@ publish.
   the showcase before it is a bug in the code.
 - **What actually throttles the login is Argon2, not the firewall.** Measured:
   ~336 ms per attempt on a debug build, so a wordlist gets single digits per
-  second and the rate limiter never trips. The firewall stays configured on
-  `/auth/` as a second line for any path that might one day answer more cheaply.
-  Do not "optimise" the password comparison.
+  second and the rate limiter never trips. The firewall is scoped to
+  `<prefix>/login` — genuine defence in depth, since reaching it already means
+  knowing the prefix. Do not "optimise" the password comparison.
 - **One admin panel, the editor is a tab in it** — not a second "edit panel".
   A second panel means a second route, a second auth surface and a second
   thing to keep in sync, to buy a separation nobody has asked for yet. Split

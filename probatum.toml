@@ -68,6 +68,20 @@ name = "and none at wp-admin either"
 get = "http://127.0.0.1:3000/wp-admin"
 expect = 404
 
+# The login was the last thing left at a fixed path, which made it the one
+# unauthenticated oracle anyone could point a wordlist at without knowing
+# anything. It moved under the prefix with everything else.
+[[check]]
+name = "there is no login at a guessable path"
+post = "http://127.0.0.1:3000/auth/login"
+body = '{"username":"editor","password":"hunter2"}'
+expect = 404
+
+[[check]]
+name = "nor at the other name everyone tries"
+get = "http://127.0.0.1:3000/login"
+expect = 404
+
 [[check]]
 name = "the framework dashboard is not at its default path"
 get = "http://127.0.0.1:3000/admin/panel"
@@ -85,17 +99,25 @@ name = "the admin route still demands a session"
 get = "http://127.0.0.1:3000/secure-testroute"
 expect = 401
 
+# Knowing the prefix gets you a login form and nothing else. It has to be
+# reachable without a session — it is how a human signs in — which makes it the
+# single unauthenticated endpoint in the binary, behind a path nobody can guess.
+[[check]]
+name = "the prefix serves a login form"
+get = "http://127.0.0.1:3000/secure-testroute/login"
+contains = ["<form", 'name="username"', 'name="password"']
+
 # ── logging in ─────────────────────────────────────────────────────────────
 
 [[check]]
 name = "bad credentials are refused"
-post = "http://127.0.0.1:3000/auth/login"
+post = "http://127.0.0.1:3000/secure-testroute/login"
 body = '{"username":"editor","password":"wrong"}'
 expect = 401
 
 [[check]]
 name = "good credentials open a session"
-post = "http://127.0.0.1:3000/auth/login"
+post = "http://127.0.0.1:3000/secure-testroute/login"
 body = '{"username":"editor","password":"hunter2"}'
 expect = 200
 
@@ -209,7 +231,7 @@ expect = 200
 
 [[check]]
 name = "logging out ends the session"
-post = "http://127.0.0.1:3000/auth/logout"
+post = "http://127.0.0.1:3000/secure-testroute/logout"
 expect = 200
 
 [[check]]
