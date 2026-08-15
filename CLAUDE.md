@@ -42,14 +42,15 @@ publish.
   POST to `/api/posts` followed by `POST /admin/rebuild` renders the new post —
   the throwaway handler's replay sees it. This was the architecture's main risk;
   it is settled, and the probatum checks keep it that way.
-- **Pages are served by Stela's own route, not Lithair's `FrontendServer`.**
-  `FrontendServer` derives Content-Type from the path extension
-  (`frontend/assets.rs:148`), and a blog's URLs have none (`/posts/hello`), so
-  every page would go out as `application/octet-stream` and download instead of
-  rendering. `update_asset` offers no way to set the type. Since Stela rendered
-  the page it knows what it is, so `serve_page` sets the header itself. Filed as
-  [lithair#193](https://github.com/lithair/lithair/issues/193); drop the bypass
-  if an explicit MIME setter lands.
+- **Pages are served by Lithair's `FrontendServer`, straight from SCC2 memory.**
+  Stela hand-rolled this for two releases and no longer does. `update_asset_with_mime`
+  (1.4, [lithair#193](https://github.com/lithair/lithair/issues/193)) makes the
+  content type travel with the asset, which matters because a blog's URLs have
+  no extension for detection to work from; and a miss now returns the theme's
+  `/404.html` (1.6, [lithair#206](https://github.com/lithair/lithair/pull/206))
+  instead of the framework's built-in page. Both gaps were found here and fixed
+  upstream. Do not reintroduce a local serving route without a reason neither
+  of those covers.
 - **Theme = a folder of Tera templates + CSS**, read at every rebuild (so a
   template edit needs a rebuild, not a restart). Pitch
   "Tera syntax, porting a Zola theme is reasonable work" — do NOT promise
@@ -189,6 +190,11 @@ Closed and shipped, nothing left in this repo:
 - [lithair#193](https://github.com/lithair/lithair/issues/193) — no way to set
   an asset's MIME type; extensionless clean URLs defaulted to octet-stream.
   Fixed by `update_asset_with_mime` in lithair-core 1.4.0.
+- [lithair#206](https://github.com/lithair/lithair/pull/206) — a PR, not an
+  issue: `FrontendServer` answered every miss with a hardcoded page and offered
+  no way to replace it. A site that stores `/404.html` now gets it back.
+  Merged, shipped in 1.6.0. Together with #193 this deleted `serve_page`
+  entirely — 43 lines and the `hyper` direct dependency.
 
 **Preset images are pinned by digest upstream, so they lag by design.** cidx
 bumps its `probatum` preset one commit per probatum release; between the two,

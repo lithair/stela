@@ -7,10 +7,10 @@
 use anyhow::Result;
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
-use http::{Method, Request, Response, StatusCode};
+use http::{Method, Response, StatusCode};
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use lithair_core::app::{DeclarativeModelHandler, LithairServer, ModelHandler};
-use lithair_core::frontend::FrontendEngine;
+use lithair_core::frontend::{FrontendEngine, FrontendServer};
 use lithair_macros::DeclarativeModel;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
@@ -140,7 +140,7 @@ async fn main() -> Result<()> {
     let rebuild_engine = engine.clone();
     let rebuild_dir = posts_dir.clone();
     let rebuild_site = site.clone();
-    let serve_engine = engine.clone();
+    let frontend_server = Arc::new(FrontendServer::new_scc2(engine.clone()));
 
     LithairServer::new()
         .with_port(port)
@@ -163,9 +163,18 @@ async fn main() -> Result<()> {
                 }
             })
         })
+        // Lithair serves every rendered page straight from SCC2 memory. Stela
+        // hand-rolled this until lithair#206: the MIME type now travels with
+        // the asset, and a miss returns the theme's /404.html rather than the
+        // framework's built-in page, so there is nothing left to reimplement.
         .with_route(Method::GET, "/*".to_string(), move |req| {
-            let engine = serve_engine.clone();
-            Box::pin(async move { Ok(serve_page(req, &engine).await) })
+            let server = frontend_server.clone();
+            Box::pin(async move {
+                Ok(server
+                    .handle_request(req)
+                    .await
+                    .unwrap_or_else(|e| match e {}))
+            })
         })
         .serve()
         .await?;
@@ -285,43 +294,6 @@ fn markdown_to_html(markdown: &str) -> String {
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, parser);
     html
-}
-
-/// Serve a rendered page out of memory.
-///
-/// Since lithair-core 1.4 the MIME type travels with the asset
-/// (`update_asset_with_mime`), so this no longer has to guess it — that was the
-/// original reason to bypass `FrontendServer` (lithair#193, closed).
-///
-/// What still keeps this function alive is the 404: `FrontendServer` answers a
-/// miss with a hardcoded neon-green terminal page, which is fine for a framework
-/// demo and wrong for someone's blog. A reader who mistypes a URL should land on
-/// the site's own design. Filed upstream — once `FrontendServer` will serve a
-/// `/404.html` asset when one exists, this whole function goes away.
-async fn serve_page(req: Request<hyper::body::Incoming>, engine: &FrontendEngine) -> Resp {
-    let path = match req.uri().path() {
-        "" | "/" => "/index.html",
-        p => p,
-    };
-
-    let (status, asset) = match engine.get_asset(path).await {
-        Some(asset) => (StatusCode::OK, Some(asset)),
-        None => (StatusCode::NOT_FOUND, engine.get_asset("/404.html").await),
-    };
-
-    match asset {
-        Some(asset) => Response::builder()
-            .status(status)
-            .header("Content-Type", asset.mime_type)
-            .body(Full::new(Bytes::from(asset.content)).boxed())
-            .expect("response builder cannot fail on a header taken from a stored asset"),
-        // Only reachable before the first rebuild has stored the theme's page.
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .header("Content-Type", HTML)
-            .body(Full::new(Bytes::from("<h1>404</h1>")).boxed())
-            .expect("response builder cannot fail on a static header set"),
-    }
 }
 
 fn json(status: StatusCode, body: &str) -> Resp {
