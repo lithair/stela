@@ -110,3 +110,72 @@ footer {
   border-top: 1px solid var(--rule);
   font-size: 0.9rem;
 }
+
+/* Editor — admin only, never linked from the public site. */
+.editor {
+  display: grid;
+  gap: 1rem;
+  margin-bottom: 2.5rem;
+}
+
+.editor label {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.editor label.inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.9rem;
+}
+
+.editor input[type="text"],
+.editor input:not([type]),
+.editor textarea {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+}
+
+.editor textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.editor button {
+  justify-self: start;
+  padding: 0.55rem 1.4rem;
+  border: 1px solid var(--ink);
+  border-radius: 4px;
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  cursor: pointer;
+}
+
+.editor button:hover {
+  opacity: 0.85;
+}
+
+.posts em {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.posts code {
+  color: var(--muted);
+  font-size: 0.8rem;
+}

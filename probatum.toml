@@ -121,6 +121,55 @@ name = "the refused post never reached the store"
 get = "http://127.0.0.1:3000/posts/sneaky"
 expect = 404
 
+# ── the editor tab ─────────────────────────────────────────────────────────
+# RED on purpose. The panel currently serves a landing page; it should serve the
+# editor. The UI assertions are shallow by necessity — probatum has no browser,
+# so it can say the form is there, not that it works.
+#
+# Editing and unpublishing an EXISTING post are the behaviours this slice really
+# adds, and neither is expressible: the framework routes updates through PUT or
+# PATCH (POST on the collection means create), probatum has no key for either,
+# and `run: curl -X PUT` does not share the cookie jar so it would be anonymous.
+# Filed as probatum-org/probatum#7. What IS provable today is the half that
+# leaks if it breaks: a post that is not published must not be readable.
+
+[[check]]
+name = "the admin panel serves the editor"
+get = "http://127.0.0.1:3000/secure-testroute"
+contains = ['name="slug"', 'name="title"', 'name="body"', "<textarea"]
+
+[[check]]
+name = "the editor lists what is already published"
+get = "http://127.0.0.1:3000/secure-testroute"
+contains = ["hello"]
+
+[[check]]
+name = "a draft is accepted"
+post = "http://127.0.0.1:3000/api/posts"
+body = '{"slug":"un-brouillon","title":"Pas fini","body":"# Wip","published":false}'
+expect = 201
+
+[[check]]
+name = "rebuilding after a draft is accepted"
+post = "http://127.0.0.1:3000/admin/rebuild"
+expect = 200
+
+# The one that matters: an unpublished post readable at its URL is a leak.
+[[check]]
+name = "a draft is not readable"
+get = "http://127.0.0.1:3000/posts/un-brouillon"
+expect = 404
+
+[[check]]
+name = "a draft is not in the feed either"
+get = "http://127.0.0.1:3000/rss.xml"
+contains = ["Premier post"]
+
+[[check]]
+name = "the editor shows the draft so it can be finished"
+get = "http://127.0.0.1:3000/secure-testroute"
+contains = ["un-brouillon", "Pas fini"]
+
 # ── and the session is what was doing the work ─────────────────────────────
 
 [[check]]

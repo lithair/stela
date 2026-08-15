@@ -194,7 +194,9 @@ async fn main() -> Result<()> {
     let login_sessions = sessions.clone();
     let logout_sessions = sessions.clone();
     let login_user = admin_user.clone();
-    let admin_page = admin_html(&site, &admin_route);
+    let admin_site = site.clone();
+    let admin_dir = posts_dir.clone();
+    let admin_route_for_page = admin_route.clone();
 
     LithairServer::new()
         .with_port(port)
@@ -228,8 +230,16 @@ async fn main() -> Result<()> {
             Box::pin(async move { Ok(logout(req, store).await) })
         })
         .with_route(Method::GET, admin_route.clone(), move |_req| {
-            let page = admin_page.clone();
-            Box::pin(async move { Ok(html(StatusCode::OK, page)) })
+            let site = admin_site.clone();
+            let dir = admin_dir.clone();
+            let route = admin_route_for_page.clone();
+            Box::pin(async move {
+                let posts = load_posts(&dir).await.unwrap_or_else(|e| {
+                    log::error!("the editor could not read the post store: {e}");
+                    Vec::new()
+                });
+                Ok(html(StatusCode::OK, admin_html(&site, &route, &posts)))
+            })
         })
         .with_model::<Post>(posts_dir.clone(), "/api/posts")
         .with_route(Method::POST, "/admin/rebuild".to_string(), move |_req| {
@@ -276,45 +286,30 @@ async fn main() -> Result<()> {
 /// though that API owns its own handler inside the server. It is also why no
 /// Lithair change is needed to trigger a rebuild — see CLAUDE.md.
 async fn rebuild(engine: &FrontendEngine, posts_dir: &str, site: &Site) -> Result<usize> {
-    let handler = DeclarativeModelHandler::<Post>::new(posts_dir.to_string())
-        .await
-        .map_err(|e| anyhow::anyhow!("could not open the post store: {e}"))?;
+    let stored = load_posts(posts_dir).await?;
 
     let now = chrono::Utc::now().to_rfc2822();
-    let mut posts: Vec<serde_json::Value> =
-        serde_json::from_value::<Vec<Post>>(handler.get_all_data_json().await)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|p| p.published)
-            .filter(|p| {
-                // The slug reaches us straight from the REST API and is used to
-                // build an asset path. An unchecked one writes wherever it likes
-                // (`../../x`) and lands unescaped in the feed's URLs. Refuse it
-                // here, where every rendered page funnels through.
-                let ok = slug_is_safe(&p.slug);
-                if !ok {
-                    log::warn!("skipping post with unusable slug: {:?}", p.slug);
-                }
-                ok
+    let mut posts: Vec<serde_json::Value> = stored
+        .into_iter()
+        .filter(|p| p.published)
+        .map(|p| {
+            serde_json::json!({
+                "slug": p.slug,
+                "title": p.title,
+                // Built here rather than concatenated in the template so the
+                // feed can mark it `safe`: Tera's escape_xml turns every "/"
+                // into "&#x2F;", which is valid XML but not a URL anyone
+                // wants to read. Safe to trust only because slug_is_safe ran.
+                "url": format!("{}/posts/{}", site.base_url.trim_end_matches('/'), p.slug),
+                "body_html": markdown_to_html(&p.body),
+                // ponytail: no per-post date field yet, so every item carries
+                // the build time. Add `published_at` to Post when someone
+                // complains about feed ordering — the first symptom that
+                // actually matters.
+                "published_rfc2822": now,
             })
-            .map(|p| {
-                serde_json::json!({
-                    "slug": p.slug,
-                    "title": p.title,
-                    // Built here rather than concatenated in the template so the
-                    // feed can mark it `safe`: Tera's escape_xml turns every "/"
-                    // into "&#x2F;", which is valid XML but not a URL anyone
-                    // wants to read. Safe to trust only because slug_is_safe ran.
-                    "url": format!("{}/posts/{}", site.base_url.trim_end_matches('/'), p.slug),
-                    "body_html": markdown_to_html(&p.body),
-                    // ponytail: no per-post date field yet, so every item carries
-                    // the build time. Add `published_at` to Post when someone
-                    // complains about feed ordering — the first symptom that
-                    // actually matters.
-                    "published_rfc2822": now,
-                })
-            })
-            .collect();
+        })
+        .collect();
 
     posts.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
 
@@ -353,6 +348,39 @@ async fn rebuild(engine: &FrontendEngine, posts_dir: &str, site: &Site) -> Resul
 
     log::info!("rebuilt {} published post(s)", posts.len());
     Ok(posts.len())
+}
+
+/// Every post in the store, unusable slugs already dropped.
+///
+/// The handler is built here and dropped at the end on purpose: `new()` replays
+/// the event log from disk, so this sees writes made through the REST API even
+/// though that API owns its own handler inside the server. It is also why no
+/// Lithair change is needed to trigger a rebuild — see CLAUDE.md.
+///
+/// ponytail: a replay per call, which the editor pays on every page view. Fine
+/// for a blog; if a site ever grows enough posts for it to show, cache it and
+/// invalidate on rebuild.
+async fn load_posts(posts_dir: &str) -> Result<Vec<Post>> {
+    let handler = DeclarativeModelHandler::<Post>::new(posts_dir.to_string())
+        .await
+        .map_err(|e| anyhow::anyhow!("could not open the post store: {e}"))?;
+
+    Ok(
+        serde_json::from_value::<Vec<Post>>(handler.get_all_data_json().await)
+            .unwrap_or_default()
+            .into_iter()
+            // The slug arrives straight from the REST API and becomes an asset path.
+            // An unchecked one writes wherever it likes (`../../x`) and lands
+            // unescaped in the feed's URLs. Filtered here, where every caller passes.
+            .filter(|p| {
+                let ok = slug_is_safe(&p.slug);
+                if !ok {
+                    log::warn!("skipping post with unusable slug: {:?}", p.slug);
+                }
+                ok
+            })
+            .collect(),
+    )
 }
 
 /// A slug has to be safe as a URL path segment and as an asset key.
@@ -496,21 +524,40 @@ fn new_session_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The admin landing page, rendered once at startup.
+/// The editor page.
 ///
-/// It never changes between requests, so it is not worth re-rendering on each
-/// one — and unlike the blog's pages it is not pushed into the asset store,
-/// because assets are what `FrontendServer` serves to the public.
-fn admin_html(site: &Site, admin_route: &str) -> String {
+/// Rendered per request rather than pushed into the asset store, because the
+/// asset store is what `FrontendServer` hands to the public — an admin page
+/// living there would be one routing mistake away from being world-readable.
+/// It also has to show drafts, which by definition are not in the rendered site.
+fn admin_html(site: &Site, admin_route: &str, posts: &[Post]) -> String {
     let mut ctx = tera::Context::new();
     ctx.insert("site", site);
     ctx.insert("admin_route", admin_route);
+    ctx.insert("posts", posts);
+    // Serialised once for the page's script so clicking a post fills the form
+    // from what is already loaded instead of fetching it again.
+    ctx.insert("posts_json", &posts_as_script_json(posts));
     theme()
         .and_then(|t| t.render("admin.html", &ctx).map_err(Into::into))
         .unwrap_or_else(|e| {
             log::error!("the bundled admin template failed to render: {e}");
-            "<h1>Admin</h1>".to_string()
+            "<h1>Editor unavailable</h1>".to_string()
         })
+}
+
+/// Serialise posts for embedding inside a `<script>` block.
+///
+/// `</` is escaped to `<\/`. Inside a script element the HTML parser stops at
+/// the first `</script`, wherever it appears — including inside a JavaScript
+/// string — so a post whose body contains that sequence would close the block
+/// and let the rest of the body run as markup. The escape is invalid in strict
+/// JSON but valid in a JavaScript string literal, which is what this becomes,
+/// and it parses back to the same characters.
+fn posts_as_script_json(posts: &[Post]) -> String {
+    serde_json::to_string(posts)
+        .unwrap_or_else(|_| "[]".to_string())
+        .replace("</", "<\\/")
 }
 
 fn html(status: StatusCode, body: String) -> Resp {
@@ -555,6 +602,24 @@ mod tests {
         assert!(!slug_is_safe(""));
         assert!(!slug_is_safe("Hello"));
         assert!(!slug_is_safe(&"x".repeat(201)));
+    }
+
+    #[test]
+    fn a_post_cannot_break_out_of_the_editor_script_block() {
+        let posts = vec![Post {
+            slug: "x".into(),
+            title: "t".into(),
+            body: "</script><img src=x onerror=alert(1)>".into(),
+            published: true,
+        }];
+
+        let json = posts_as_script_json(&posts);
+
+        assert!(
+            !json.contains("</script"),
+            "the script block can be closed: {json}"
+        );
+        assert!(json.contains("<\\/script"));
     }
 
     #[test]

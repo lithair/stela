@@ -123,8 +123,25 @@ at the operator's own route.
 - Login failures never distinguish a bad username from a bad password, and
   Argon2 verification runs either way so the two take the same time.
 
-**Next:** the markdown editor as a tab in the admin panel. RBAC roles beyond
-"the admin is logged in" wait for a second kind of user to exist.
+**The editor is in.** The admin route serves a markdown editor: a form, the list
+of posts including drafts, and click-to-edit. It writes through the existing
+gated API (`POST /api/posts`, `PUT /api/posts/:slug`) and then calls
+`/admin/rebuild` — no second write path, because two handlers writing the same
+event store is a problem worth not creating.
+
+- The editor page is rendered **per request**, never pushed into the asset
+  store: assets are what `FrontendServer` hands the public, so an admin page
+  living there would be one routing mistake from world-readable. It also has to
+  show drafts, which by definition are not in the rendered site.
+- Posts are embedded in the page as JSON so clicking one fills the form without
+  a round trip. `</` is escaped there — inside a `<script>` the HTML parser
+  stops at the first `</script` wherever it appears, including inside a JS
+  string, so a post body containing it would otherwise close the block and run
+  as markup.
+
+**Next:** RBAC roles beyond "the admin is logged in" wait for a second kind of
+user to exist. `stela new` (generate the admin route, store the password hash)
+is the gap between this and a thing someone else can install.
 
 Explicit NON-goals for the MVP — add only when a real user asks: comments,
 media library/uploads, multi-theme switching, plugins, multi-author,
