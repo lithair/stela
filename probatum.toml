@@ -51,8 +51,27 @@ expect = 401
 
 [[check]]
 name = "rebuilding without a session is refused"
-post = "http://127.0.0.1:3000/admin/rebuild"
+post = "http://127.0.0.1:3000/secure-testroute/rebuild"
 expect = 401
+
+# The wp-admin lesson, stated as a check: there is no admin surface at a path
+# anyone can guess. Everything administrative hangs off the operator's own
+# prefix, so a scanner walking the usual list finds nothing to even authenticate
+# against.
+[[check]]
+name = "no admin surface at the paths every scanner tries"
+get = "http://127.0.0.1:3000/admin"
+expect = 404
+
+[[check]]
+name = "and none at wp-admin either"
+get = "http://127.0.0.1:3000/wp-admin"
+expect = 404
+
+[[check]]
+name = "the framework dashboard is not at its default path"
+get = "http://127.0.0.1:3000/admin/panel"
+expect = 404
 
 # ── the admin panel is behind both the route and the session ───────────────
 
@@ -95,7 +114,7 @@ expect = 201
 
 [[check]]
 name = "a logged-in editor can rebuild"
-post = "http://127.0.0.1:3000/admin/rebuild"
+post = "http://127.0.0.1:3000/secure-testroute/rebuild"
 expect = 200
 
 [[check]]
@@ -151,7 +170,7 @@ expect = 201
 
 [[check]]
 name = "rebuilding after a draft is accepted"
-post = "http://127.0.0.1:3000/admin/rebuild"
+post = "http://127.0.0.1:3000/secure-testroute/rebuild"
 expect = 200
 
 # The one that matters: an unpublished post readable at its URL is a leak.
@@ -170,6 +189,22 @@ name = "the editor shows the draft so it can be finished"
 get = "http://127.0.0.1:3000/secure-testroute"
 contains = ["un-brouillon", "Pas fini"]
 
+# ── Lithair's own dashboard, behind the same prefix ────────────────────────
+# The point of building on Lithair is not to reimplement what it ships. Its
+# admin panel and data admin UI are mounted under the operator's prefix rather
+# than their default paths, so they inherit the same "nothing to find" property
+# as the editor.
+
+[[check]]
+name = "the framework dashboard opens with a session"
+get = "http://127.0.0.1:3000/secure-testroute/panel"
+expect = 200
+
+[[check]]
+name = "the data admin opens with a session"
+get = "http://127.0.0.1:3000/secure-testroute/data"
+expect = 200
+
 # ── and the session is what was doing the work ─────────────────────────────
 
 [[check]]
@@ -182,3 +217,17 @@ name = "publishing after logout is refused again"
 post = "http://127.0.0.1:3000/api/posts"
 body = '{"slug":"after-logout","title":"Nope","body":"x","published":true}'
 expect = 401
+
+# ── what protects the login, and why it is not asserted here ───────────────
+# Measured, not assumed: 40 wrong-password attempts against a debug build took
+# 13.4s — about 336ms each. The throttle is Argon2, not the firewall, and the
+# rate limiter on /auth/ never trips because the hash never lets the request
+# rate climb high enough to reach it. It stays configured as a second line for
+# any future path that answers more cheaply.
+#
+# The assertion worth having — "a wrong password must NOT come back fast",
+# which is what would catch someone swapping the hash for a string compare —
+# needs the mirror of max_ms. Filed as probatum-org/probatum#8. `run` is not a
+# workaround: the probatum image ships no curl, no seq, and a BusyBox `date`
+# without %N, so elapsed-time arithmetic in a shell check is not available
+# either.

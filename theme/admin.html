@@ -101,7 +101,7 @@
 
           // Writing stores the post; rendering it is a separate step. Both have
           // to succeed or the site shows something other than what was saved.
-          const build = await fetch("/admin/rebuild", { method: "POST" });
+          const build = await fetch("{{ admin_route }}/rebuild", { method: "POST" });
           if (!build.ok) throw new Error("saved, but the rebuild failed (" + build.status + ")");
 
           location.reload();

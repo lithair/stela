@@ -11,7 +11,7 @@ keywords = ["blog", "cms", "lithair", "single-binary"]
 categories = ["web-programming"]
 
 [dependencies]
-lithair-core = "1.7"
+lithair-core = { version = "1.7", features = ["admin-ui"] }
 lithair-macros = "1.7"
 # Tera 1.x on purpose: it is the version Zola uses, and "porting a Zola theme
 # is reasonable work" is a stated pitch. Builtins stay on — rss.xml needs

@@ -11,7 +11,7 @@ use http::{Method, Response, StatusCode};
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use lithair_core::app::{DeclarativeModelHandler, LithairServer, ModelHandler};
 use lithair_core::frontend::{FrontendEngine, FrontendServer};
-use lithair_core::http::{utils::Req, RouteGuard};
+use lithair_core::http::{utils::Req, FirewallConfig, RouteGuard};
 use lithair_core::session::{PersistentSessionStore, Session, SessionManager, SessionStore};
 use lithair_macros::DeclarativeModel;
 use serde::{Deserialize, Serialize};
@@ -116,6 +116,12 @@ const SESSION_COOKIE: &str = "session_token";
 /// How long a login lasts before the editor has to sign in again.
 const SESSION_HOURS: i64 = 12;
 
+/// Requests per second, per IP, allowed on the login and the admin prefix.
+///
+/// Generous for a human — nobody types a password ten times a second — and
+/// ruinous for a script working through a wordlist.
+const LOGIN_QPS: u64 = 10;
+
 /// Everything the templates need that is not a post.
 #[derive(Clone, Serialize)]
 struct Site {
@@ -205,13 +211,11 @@ async fn main() -> Result<()> {
         // Gates every auto-generated /api/* route: no live session, no write.
         // Reads of the blog itself do not go through here — they are assets.
         .with_models_require_session(true)
-        .with_route_guard(
-            "/admin/*",
-            RouteGuard::RequireAuth {
-                redirect_to: None,
-                exclude: vec![],
-            },
-        )
+        // One guarded prefix instead of a list of guarded paths. Everything
+        // administrative — the editor, the rebuild, Lithair's dashboard, the
+        // data admin — hangs off the operator's own route, so there is nothing
+        // at a guessable path to authenticate against in the first place. That
+        // is the whole difference from a /wp-admin.
         .with_route_guard(
             admin_route.clone(),
             RouteGuard::RequireAuth {
@@ -219,6 +223,36 @@ async fn main() -> Result<()> {
                 exclude: vec![],
             },
         )
+        .with_route_guard(
+            format!("{admin_route}/*"),
+            RouteGuard::RequireAuth {
+                redirect_to: None,
+                exclude: vec![],
+            },
+        )
+        // Lithair ships a dashboard and a data admin. Building a blog on this
+        // framework and then reimplementing them would be the wrong showcase —
+        // they are mounted under the same secret prefix instead, so they
+        // inherit the same "nothing to find" property.
+        .with_admin_panel(true)
+        .with_admin_auth(true)
+        .with_admin_path(format!("{admin_route}/panel"))
+        .with_data_admin_ui(format!("{admin_route}/data"))
+        // Rate limiting scoped to /auth/ and nothing else. That is the only
+        // endpoint an anonymous caller can write to, so it is the only one a
+        // wordlist can be pointed at; everything else already needs a session.
+        // Public reads stay outside it — a blog that throttles readers has
+        // misunderstood what it is for — and so does the admin prefix, where
+        // throttling a logged-in editor buys nothing and costs page loads.
+        .with_firewall_config(FirewallConfig {
+            enabled: true,
+            allow: Default::default(),
+            deny: Default::default(),
+            global_qps: None,
+            per_ip_qps: Some(LOGIN_QPS),
+            protected_prefixes: vec!["/auth/".to_string()],
+            exempt_prefixes: vec![],
+        })
         .with_route(Method::POST, "/auth/login".to_string(), move |req| {
             let store = login_sessions.clone();
             let user = login_user.clone();
@@ -242,23 +276,27 @@ async fn main() -> Result<()> {
             })
         })
         .with_model::<Post>(posts_dir.clone(), "/api/posts")
-        .with_route(Method::POST, "/admin/rebuild".to_string(), move |_req| {
-            let engine = rebuild_engine.clone();
-            let dir = rebuild_dir.clone();
-            let site = rebuild_site.clone();
-            Box::pin(async move {
-                match rebuild(&engine, &dir, &site).await {
-                    Ok(n) => Ok(json(StatusCode::OK, &format!(r#"{{"rendered":{n}}}"#))),
-                    Err(e) => {
-                        log::error!("rebuild failed: {e}");
-                        Ok(json(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            r#"{"error":"rebuild failed"}"#,
-                        ))
+        .with_route(
+            Method::POST,
+            format!("{admin_route}/rebuild"),
+            move |_req| {
+                let engine = rebuild_engine.clone();
+                let dir = rebuild_dir.clone();
+                let site = rebuild_site.clone();
+                Box::pin(async move {
+                    match rebuild(&engine, &dir, &site).await {
+                        Ok(n) => Ok(json(StatusCode::OK, &format!(r#"{{"rendered":{n}}}"#))),
+                        Err(e) => {
+                            log::error!("rebuild failed: {e}");
+                            Ok(json(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                r#"{"error":"rebuild failed"}"#,
+                            ))
+                        }
                     }
-                }
-            })
-        })
+                })
+            },
+        )
         // Lithair serves every rendered page straight from SCC2 memory. Stela
         // hand-rolled this until lithair#206: the MIME type now travels with
         // the asset, and a miss returns the theme's /404.html rather than the

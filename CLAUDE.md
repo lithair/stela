@@ -61,12 +61,31 @@ publish.
   Lithair pattern (see lithair's rbac-session example). `SiteSettings` feeds
   the Tera context, so admin edits (title, colors, menus) apply on the next
   rebuild — which the admin triggers as part of saving.
-- **Admin lives at a per-install random route** — `/secure-xxxxxxx`, generated
-  once by `stela new` and printed for the user to write down. This is
-  defense-in-depth against drive-by scanners, NOT authentication: a URL leaks
-  through Referer headers, browser history, and proxy logs. The session/RBAC
-  gate stays mandatory behind it. Print that caveat where the route is shown,
-  so nobody treats the secret URL as the lock.
+- **No administrative surface at a guessable path. This is the product's
+  security posture, not a detail.** WordPress taught the internet that
+  `/wp-admin` exists on millions of hosts, and every scanner walks that list all
+  day. Stela is the opposite: the editor, the rebuild, Lithair's dashboard and
+  the data admin all hang off one per-install prefix
+  (`/secure-xxxxxxx/…`), so a scanner finds nothing to even authenticate
+  against. `/admin`, `/wp-admin` and the framework's own default paths return
+  404, and there are checks that say so.
+  The secret prefix is defence in depth, NOT authentication — a URL leaks
+  through Referer headers, browser history and proxy logs — so the session gate
+  behind it stays mandatory, and the startup banner says exactly that where the
+  route is printed.
+- **Use Lithair's security, do not reimplement it.** Stela is meant to be a
+  showcase of the framework, so the gating is Lithair's:
+  `with_models_require_session` for `/api/*`, `RouteGuard::RequireAuth` on the
+  prefix, `with_admin_panel` + `with_admin_path` for the dashboard,
+  `with_data_admin_ui` for the data admin (behind the `admin-ui` feature),
+  `with_firewall_config` for rate limiting, Argon2 from
+  `lithair_core::security`. Reaching for a hand-rolled equivalent is a bug in
+  the showcase before it is a bug in the code.
+- **What actually throttles the login is Argon2, not the firewall.** Measured:
+  ~336 ms per attempt on a debug build, so a wordlist gets single digits per
+  second and the rate limiter never trips. The firewall stays configured on
+  `/auth/` as a second line for any path that might one day answer more cheaply.
+  Do not "optimise" the password comparison.
 - **One admin panel, the editor is a tab in it** — not a second "edit panel".
   A second panel means a second route, a second auth surface and a second
   thing to keep in sync, to buy a separation nobody has asked for yet. Split
