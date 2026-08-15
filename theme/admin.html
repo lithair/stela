@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Admin — {{ site.title }}</title>
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1><a href="/">{{ site.title }}</a></h1>
+      <p class="tagline">Admin</p>
+    </header>
+
+    <main>
+      <article>
+        <h2>Signed in</h2>
+        <p>
+          This panel is reachable at <code>{{ admin_route }}</code>. Write that
+          address down — it is not linked from anywhere, and it is not printed
+          again after startup.
+        </p>
+        <p class="empty">
+          The markdown editor is the next slice. Until then, publish through
+          <code>POST /api/posts</code> and then <code>POST /admin/rebuild</code>,
+          from this browser session or with the cookie it holds.
+        </p>
+      </article>
+    </main>
+
+    <footer>
+      <a href="/">← Back to the blog</a>
+    </footer>
+  </body>
+</html>

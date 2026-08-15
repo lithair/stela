@@ -98,12 +98,33 @@ file), markdown via `pulldown-cmark`.
 
 **Shipped so far:** `Post` (slug as primary key, since the slug IS the URL),
 `stela serve`, the default theme compiled into the binary, markdown via
-`pulldown-cmark`, `/`, `/posts/:slug`, `/rss.xml`, and `POST /admin/rebuild`.
+`pulldown-cmark`, `/`, `/posts/:slug`, `/rss.xml`, `POST /admin/rebuild`, and
+session auth — `/auth/login`, `/auth/logout`, every write gated, the admin panel
+at the operator's own route.
 
-**The next slice is auth, and it is not optional.** `/api/posts` and
-`/admin/rebuild` are currently open to anyone who can reach the port; the binary
-says so loudly at startup. Nothing should be deployed anywhere until session +
-RBAC and the random admin route land.
+**Auth decisions, settled:**
+- `stela serve` **refuses to start** without `--admin-route` and
+  `STELA_ADMIN_PASSWORD`. No defaults: a predictable admin path is one every
+  scanner knows, and an unset password would mean an open panel. The password
+  comes from the environment, never a flag — arguments show up in `ps` and shell
+  history.
+- The password is hashed once at boot with Lithair's Argon2id
+  (`lithair_core::security`), so login compares hashes rather than plaintext.
+  When `stela new` arrives it should store the hash and stop handling the
+  plaintext at all.
+- Session tokens are 256 bits from `getrandom`. The cookie is `session_token`
+  because that is the name Lithair's extractor looks for
+  (`http/declarative.rs`), and it carries `HttpOnly; SameSite=Strict; Secure`.
+  `Secure` is unconditional: browsers and curl both treat localhost as a secure
+  context, so local development works, and anything else should be behind TLS.
+- Writes are gated by `with_models_require_session(true)` for `/api/*` and
+  `RouteGuard::RequireAuth` for `/admin/*` and the admin route. Public reads are
+  untouched — they are assets, not model routes.
+- Login failures never distinguish a bad username from a bad password, and
+  Argon2 verification runs either way so the two take the same time.
+
+**Next:** the markdown editor as a tab in the admin panel. RBAC roles beyond
+"the admin is logged in" wait for a second kind of user to exist.
 
 Explicit NON-goals for the MVP — add only when a real user asks: comments,
 media library/uploads, multi-theme switching, plugins, multi-author,
