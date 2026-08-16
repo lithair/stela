@@ -11,7 +11,7 @@ use http::{Method, Response, StatusCode};
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use lithair_core::app::{DeclarativeModelHandler, LithairServer, ModelHandler};
 use lithair_core::frontend::{FrontendEngine, FrontendServer};
-use lithair_core::http::{utils::Req, FirewallConfig, RouteGuard};
+use lithair_core::http::{utils::Req, FirewallConfig, HttpExposable, RouteGuard};
 use lithair_core::session::{PersistentSessionStore, Session, SessionManager, SessionStore};
 use lithair_macros::DeclarativeModel;
 use serde::{Deserialize, Serialize};
@@ -194,6 +194,23 @@ async fn main() -> Result<()> {
          session behind it. Serve this over HTTPS."
     );
 
+    // A write signals a rebuild instead of the caller having to ask for one.
+    // Capacity 1 and try_send: if a rebuild is already pending, dropping the
+    // signal is correct rather than lossy — rebuild() replays the whole store,
+    // so the pending one will render whatever the newer write left behind. That
+    // is what keeps a bulk import from queueing one full rebuild per post.
+    let (dirty_tx, mut dirty_rx) = tokio::sync::mpsc::channel::<()>(1);
+    let hook_engine = engine.clone();
+    let hook_dir = posts_dir.clone();
+    let hook_site = site.clone();
+    tokio::spawn(async move {
+        while dirty_rx.recv().await.is_some() {
+            if let Err(e) = rebuild(&hook_engine, &hook_dir, &hook_site).await {
+                log::error!("a rebuild triggered by a write failed: {e}");
+            }
+        }
+    });
+
     let rebuild_engine = engine.clone();
     let rebuild_dir = posts_dir.clone();
     let rebuild_site = site.clone();
@@ -287,6 +304,18 @@ async fn main() -> Result<()> {
             })
         })
         .with_model::<Post>(posts_dir.clone(), "/api/posts")
+        // lithair 1.8 (issue #70). Without it a post written through the REST
+        // API is stored and invisible until somebody remembers to call rebuild
+        // — which a headless client has no reason to know about. The hook runs
+        // after the write has reached the event store, which is what makes the
+        // replay inside rebuild() see it.
+        //
+        // The hook must stay short and is not async, so it only signals; the
+        // worker above does the work.
+        .on_mutation(Post::http_base_path(), move |event| {
+            log::info!("{} on {}, rebuilding", event.operation, event.model_name);
+            let _ = dirty_tx.try_send(());
+        })
         .with_route(
             Method::POST,
             format!("{admin_route}/rebuild"),

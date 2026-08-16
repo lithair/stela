@@ -227,6 +227,34 @@ name = "the data admin opens with a session"
 get = "http://127.0.0.1:3000/secure-testroute/data"
 expect = 200
 
+# ── the site keeps itself current, with nobody calling rebuild ─────────────
+# RED on purpose. Everything above reaches the site because something POSTed to
+# <prefix>/rebuild right after writing. A headless client has no reason to know
+# that endpoint exists, and forgetting it means a post that is stored and
+# invisible. lithair 1.8's on_mutation hook (issue #70) closes that: the write
+# path itself signals a rebuild.
+#
+# The editor still calls rebuild explicitly and should keep doing so — it gives
+# a person a deterministic "it is live now" instead of a race with a background
+# task. This is about the writes that do NOT come from the editor.
+
+[[check]]
+name = "a post written with no rebuild call is accepted"
+post = "http://127.0.0.1:3000/api/posts"
+body = '{"slug":"sans-rebuild","title":"Publié sans rebuild","body":"# Seul","published":true}'
+expect = 201
+
+# The hook runs on a background task, so the site is current in a moment rather
+# than instantly. A second is generous for a blog with three posts.
+[[check]]
+name = "give the mutation hook a moment"
+run = "sleep 1"
+
+[[check]]
+name = "and it reached the site anyway"
+get = "http://127.0.0.1:3000/posts/sans-rebuild"
+contains = ["Publié sans rebuild"]
+
 # ── and the session is what was doing the work ─────────────────────────────
 
 [[check]]

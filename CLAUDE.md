@@ -35,9 +35,16 @@ publish.
   — its `new()` replays the event log from disk (`model_handler.rs:289`), so it
   sees writes made through the API — then renders and pushes every page.
   The admin's "publish" button calls `POST /api/posts` then the rebuild.
-  Automatic hot-reload (write triggers rebuild with no caller) WOULD need a
-  post-commit hook upstream in Lithair, which does not exist (`LifecycleAware`
-  is field policies only). That hook is a v0.2 comfort, never an MVP blocker.
+  **Since lithair 1.8 a write also triggers its own rebuild** via `on_mutation`
+  (the hook this project asked for as lithair#70). The explicit route stays: the
+  editor calls it so a person gets a deterministic "it is live now" rather than
+  racing a background task, and a theme edit needs a rebuild with no write to
+  trigger it. The hook is what makes a headless client work — it has no reason
+  to know the rebuild endpoint exists.
+  Coalescing is the caller's job, as expected: a capacity-1 channel and
+  `try_send`, so a bulk import queues one rebuild rather than one per post.
+  Dropping a signal is safe precisely because `rebuild()` replays the whole
+  store — the pending rebuild renders whatever the newer write left behind.
   VERIFIED 2026-07-27: the event store does flush synchronously on write. A
   POST to `/api/posts` followed by `POST /admin/rebuild` renders the new post —
   the throwaway handler's replay sees it. This was the architecture's main risk;

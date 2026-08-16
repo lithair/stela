@@ -1343,9 +1343,9 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "lithair-core"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f5f2e51feca83ec86556322a1d3dc801288a50262a178e762ee94be1ff2b3b7"
+checksum = "1561492d35416f0dc8468ac8e7cd12bed9a5b038a32259280544916870a8523a"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1391,9 +1391,9 @@ dependencies = [
 
 [[package]]
 name = "lithair-macros"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c42deb3e82b9e2a0947339ee574380fb7f663cdffb9982ef384748b24e296e6"
+checksum = "e11d94846f76ee42722451b42ae04fafb84ea4957db72c88765198e982e97a50"
 dependencies = [
  "proc-macro2",
  "quote",
