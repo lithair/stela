@@ -11,8 +11,8 @@ use http::{Method, Response, StatusCode};
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use lithair_core::app::{DeclarativeModelHandler, LithairServer, ModelHandler};
 use lithair_core::frontend::{FrontendEngine, FrontendServer};
-use lithair_core::http::{utils::Req, FirewallConfig, HttpExposable, RouteGuard};
-use lithair_core::session::{PersistentSessionStore, Session, SessionManager, SessionStore};
+use lithair_core::http::{FirewallConfig, HttpExposable, RouteGuard};
+use lithair_core::rbac::{RbacUser, ServerRbacConfig};
 use lithair_macros::DeclarativeModel;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
@@ -109,13 +109,8 @@ enum Command {
     },
 }
 
-/// Name of the session cookie. Not arbitrary: Lithair's session extractor
-/// (`http/declarative.rs`) looks for exactly this, and it is what makes the
-/// model gate and the route guards accept a browser session.
-const SESSION_COOKIE: &str = "session_token";
-
 /// How long a login lasts before the editor has to sign in again.
-const SESSION_HOURS: i64 = 12;
+const SESSION_HOURS: u64 = 12;
 
 /// Requests per second, per IP, allowed on the login and the admin prefix.
 ///
@@ -160,8 +155,8 @@ async fn main() -> Result<()> {
     if !admin_route.starts_with('/') {
         anyhow::bail!("--admin-route must start with '/' (got {admin_route:?})");
     }
-    // Hashed once at boot so the comparison on every login attempt is Argon2's,
-    // which is constant-time, instead of a byte-by-byte match on the plaintext.
+    // Hashed here rather than handed over in the clear. RbacUser::new would do
+    // it too, but this keeps the plaintext's lifetime to these three lines.
     let admin_password_hash = lithair_core::security::hash_password(&admin_password)
         .map_err(|e| anyhow::anyhow!("could not hash the admin password: {e}"))?;
     drop(admin_password);
@@ -183,8 +178,6 @@ async fn main() -> Result<()> {
     // Render before serving: `/` has to answer 200 from the first request, even
     // with no posts, or a readiness probe never passes.
     rebuild(&engine, &posts_dir, &site).await?;
-
-    let sessions = Arc::new(PersistentSessionStore::new(data.join("sessions"))?);
 
     log::info!("stela serving on http://{host}:{port}");
     log::info!("admin panel: http://{host}:{port}{admin_route} (user: {admin_user})");
@@ -215,9 +208,6 @@ async fn main() -> Result<()> {
     let rebuild_dir = posts_dir.clone();
     let rebuild_site = site.clone();
     let frontend_server = Arc::new(FrontendServer::new_scc2(engine.clone()));
-    let login_sessions = sessions.clone();
-    let logout_sessions = sessions.clone();
-    let login_user = admin_user.clone();
     let login_site = site.clone();
     let login_route = admin_route.clone();
     let admin_site = site.clone();
@@ -227,7 +217,22 @@ async fn main() -> Result<()> {
     LithairServer::new()
         .with_port(port)
         .with_host(&host)
-        .with_sessions(SessionManager::from_arc(sessions.clone()))
+        // Auth is Lithair's, not a local reimplementation: it mounts login,
+        // logout and validate under the prefix, hashes with Argon2id, and
+        // issues the session cookie a browser needs (1.9, lithair#220).
+        // with_auth_path must come first — with_rbac_config registers those
+        // routes as it runs.
+        .with_auth_path(&admin_route)
+        .with_rbac_config(ServerRbacConfig {
+            roles: vec![("Editor".to_string(), vec!["*".to_string()])],
+            users: vec![RbacUser::new_with_hashed_password(
+                &admin_user,
+                &admin_password_hash,
+                "Editor",
+            )],
+            session_store_path: Some(data.join("sessions").to_string_lossy().to_string()),
+            session_duration: SESSION_HOURS * 3600,
+        })
         // Gates every auto-generated /api/* route: no live session, no write.
         // Reads of the blog itself do not go through here — they are assets.
         .with_models_require_session(true)
@@ -280,16 +285,6 @@ async fn main() -> Result<()> {
             let site = login_site.clone();
             let route = login_route.clone();
             Box::pin(async move { Ok(html(StatusCode::OK, login_html(&site, &route))) })
-        })
-        .with_route(Method::POST, format!("{admin_route}/login"), move |req| {
-            let store = login_sessions.clone();
-            let user = login_user.clone();
-            let hash = admin_password_hash.clone();
-            Box::pin(async move { Ok(login(req, store, &user, &hash).await) })
-        })
-        .with_route(Method::POST, format!("{admin_route}/logout"), move |req| {
-            let store = logout_sessions.clone();
-            Box::pin(async move { Ok(logout(req, store).await) })
         })
         .with_route(Method::GET, admin_route.clone(), move |_req| {
             let site = admin_site.clone();
@@ -486,120 +481,6 @@ fn markdown_to_html(markdown: &str) -> String {
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, parser);
     html
-}
-
-/// Open a session for the admin, or refuse.
-///
-/// Both failure modes answer the same 401 with the same body: telling an
-/// attacker whether the username exists narrows their search for free.
-async fn login(
-    req: Req,
-    sessions: Arc<PersistentSessionStore>,
-    admin_user: &str,
-    admin_password_hash: &str,
-) -> Resp {
-    #[derive(Deserialize)]
-    struct Credentials {
-        username: String,
-        password: String,
-    }
-
-    let refused = || {
-        json(
-            StatusCode::UNAUTHORIZED,
-            r#"{"error":"invalid credentials"}"#,
-        )
-    };
-
-    let Ok(body) = req.into_body().collect().await else {
-        return refused();
-    };
-    let Ok(creds) = serde_json::from_slice::<Credentials>(&body.to_bytes()) else {
-        return refused();
-    };
-
-    // Argon2 verification runs even when the username is wrong, so a bad
-    // username and a bad password take the same time to refuse.
-    let password_ok = lithair_core::security::verify_password(&creds.password, admin_password_hash)
-        .unwrap_or(false);
-    if creds.username != admin_user || !password_ok {
-        log::warn!("refused a login for {:?}", creds.username);
-        return refused();
-    }
-
-    let token = new_session_token();
-    let expires_at = chrono::Utc::now() + chrono::Duration::hours(SESSION_HOURS);
-    let mut session = Session::new(token.clone(), expires_at);
-    if session.set("user", &creds.username).is_err() || sessions.set(session).await.is_err() {
-        log::error!("could not persist a session for {:?}", creds.username);
-        return json(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            r#"{"error":"session store failed"}"#,
-        );
-    }
-
-    log::info!("{} logged in", creds.username);
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/json")
-        // HttpOnly keeps the token away from page scripts, SameSite=Strict stops
-        // another site driving the admin API with the editor's session, and
-        // Secure means it never travels in clear — which does assume HTTPS, as
-        // the startup warning says.
-        .header(
-            "Set-Cookie",
-            format!(
-                "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age={}",
-                SESSION_HOURS * 3600
-            ),
-        )
-        .body(Full::new(Bytes::from(r#"{"status":"ok"}"#)).boxed())
-        .expect("response builder cannot fail on a static header set")
-}
-
-/// Close the session and clear the cookie.
-///
-/// Answers 200 whether or not a session was found: "you are logged out" is true
-/// either way, and reporting the difference only tells a caller whether the
-/// token it presented was live.
-async fn logout(req: Req, sessions: Arc<PersistentSessionStore>) -> Resp {
-    if let Some(token) = session_cookie(&req) {
-        if sessions.delete(&token).await.is_err() {
-            log::warn!("could not delete a session on logout");
-        }
-    }
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/json")
-        .header(
-            "Set-Cookie",
-            format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=0"),
-        )
-        .body(Full::new(Bytes::from(r#"{"status":"ok"}"#)).boxed())
-        .expect("response builder cannot fail on a static header set")
-}
-
-fn session_cookie(req: &Req) -> Option<String> {
-    req.headers()
-        .get(http::header::COOKIE)?
-        .to_str()
-        .ok()?
-        .split(';')
-        .find_map(|part| part.trim().strip_prefix(&format!("{SESSION_COOKIE}=")))
-        .map(str::to_string)
-        .filter(|t| !t.is_empty())
-}
-
-/// A session token, 256 bits from the OS random source.
-///
-/// `getrandom` rather than a counter or a timestamp: this value is the only
-/// thing standing between a stranger and the admin panel, so it has to be
-/// unguessable, not merely unique.
-fn new_session_token() -> String {
-    let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).expect("the OS random source must be available");
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// The editor page.

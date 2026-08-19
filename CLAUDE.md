@@ -139,15 +139,19 @@ at the operator's own route.
   scanner knows, and an unset password would mean an open panel. The password
   comes from the environment, never a flag — arguments show up in `ps` and shell
   history.
-- The password is hashed once at boot with Lithair's Argon2id
-  (`lithair_core::security`), so login compares hashes rather than plaintext.
-  When `stela new` arrives it should store the hash and stop handling the
-  plaintext at all.
-- Session tokens are 256 bits from `getrandom`. The cookie is `session_token`
-  because that is the name Lithair's extractor looks for
-  (`http/declarative.rs`), and it carries `HttpOnly; SameSite=Strict; Secure`.
-  `Secure` is unconditional: browsers and curl both treat localhost as a secure
-  context, so local development works, and anything else should be behind TLS.
+- **Auth is Lithair's, not Stela's.** `with_auth_path(<prefix>)` +
+  `with_rbac_config` mount login, logout and validate under the prefix, hash
+  with Argon2id, and issue the session cookie a browser needs. Stela hand-rolled
+  all of this for one release; the hand-rolled version is gone (~140 lines and
+  the `getrandom` dependency). `with_auth_path` MUST be called before
+  `with_rbac_config` — those routes are registered as it runs, and a later call
+  only logs a warning.
+  Stela still hashes the password itself rather than passing the plaintext to
+  `RbacUser::new`, which keeps the plaintext's lifetime to three lines. When
+  `stela new` arrives it should store the hash and never see the plaintext.
+  The cookie's attributes are Lithair's `CookieConfig` defaults. `host_prefix`
+  (the `__Host-` prefix, which shuts down sub-domain shadowing) is available and
+  not yet turned on — worth doing once there is a deployment to verify it on.
 - Writes are gated by `with_models_require_session(true)` for `/api/*` and
   `RouteGuard::RequireAuth` for `/admin/*` and the admin route. Public reads are
   untouched — they are assets, not model routes.
