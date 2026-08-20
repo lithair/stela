@@ -269,6 +269,17 @@ Closed and shipped, nothing left in this repo:
   Merged, shipped in 1.6.0. Together with #193 this deleted `serve_page`
   entirely — 43 lines and the `hyper` direct dependency.
 
+**Open, and it gates the `stela new` slice:**
+- [cidx#434](https://github.com/cidx-org/cidx/issues/434) — containers are
+  reused unless the config hash changes, and the only override (`CIDX_NO_REUSE`)
+  is a global env var. A container that mutates the filesystem — which is what
+  testing a scaffolding command needs — cannot declare that it wants a fresh
+  one. Using the global switch throws away the Rust build cache, turning a
+  5-second test phase into two minutes, so in practice nobody sets it.
+  Until an `ephemeral = true` lands, every `stela new` check must start with
+  `rm -rf` on its target: the test defending itself from the runner, which only
+  works while every future check remembers to.
+
 **Preset images are pinned by digest upstream, so they lag by design.** cidx
 bumps its `probatum` preset one commit per probatum release; between the two,
 override the image in `cidx.toml` (the probatum repo does the same in its own
