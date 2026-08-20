@@ -23,6 +23,48 @@
 # and retries a write, which is what proves the session was doing the work
 # rather than the endpoint being open all along.
 
+# ── stela new: the gap between "it works here" and "someone else can install it"
+# ─────────────────────────────────────────────────────────────────────────────
+# RED on purpose. These run before the server checks because they are about a
+# blog that does not exist yet, and they need no session.
+#
+# No `rm -rf` guarding them: the probatum preset declares itself ephemeral
+# (cidx#434, shipped in cidx 3.3.0), so the container has never seen a previous
+# run. That is the runner guaranteeing clean state rather than each check
+# defending itself.
+
+[[check]]
+name = "stela new scaffolds a blog and says what to write down"
+run = "./target/x86_64-unknown-linux-musl/release/stela new /tmp/blog-a"
+contains = ["/secure-", "Write these down", "Password:"]
+
+[[check]]
+name = "the admin route is actually random, not a fixed string"
+# Two blogs, two routes. If this ever passes by accident the whole security
+# posture is a lie, so it compares them rather than trusting the word "random".
+run = "./target/x86_64-unknown-linux-musl/release/stela new /tmp/blog-b >/dev/null && A=$(grep admin_route /tmp/blog-a/stela.toml) && B=$(grep admin_route /tmp/blog-b/stela.toml) && test \"$A\" != \"$B\""
+
+[[check]]
+name = "what is stored is an argon2 hash"
+run = "grep -q 'argon2id' /tmp/blog-a/stela.toml"
+
+[[check]]
+name = "the password it printed is nowhere in the config"
+# The point of the whole exercise: the plaintext is shown once and never
+# written. This regenerates one, captures the password, and greps for it.
+run = "./target/x86_64-unknown-linux-musl/release/stela new /tmp/blog-c > /tmp/new-c.txt && P=$(grep -i 'password:' /tmp/new-c.txt | tr -s ' ' | cut -d' ' -f2) && test -n \"$P\" && ! grep -qF \"$P\" /tmp/blog-c/stela.toml"
+
+[[check]]
+name = "the generated blog starts with no flags at all"
+run = "cd /tmp/blog-a && /work/target/x86_64-unknown-linux-musl/release/stela serve --port 3002"
+ready = "http://127.0.0.1:3002/"
+timeout = 15
+
+[[check]]
+name = "and it serves a real site"
+get = "http://127.0.0.1:3002/rss.xml"
+expect = 200
+
 [[check]]
 name = "serve starts and answers"
 run = "STELA_ADMIN_PASSWORD=hunter2 ./target/x86_64-unknown-linux-musl/release/stela serve --port 3000 --admin-route /secure-testroute --admin-user editor"

@@ -174,9 +174,24 @@ event store is a problem worth not creating.
   string, so a post body containing it would otherwise close the block and run
   as markup.
 
+**`stela new` is in, and it closes the install gap.** `stela new <dir>` writes
+`stela.toml` with a random admin route, the operator's username and an Argon2id
+hash — then prints the route and a generated password once and forgets both.
+`stela serve` in that directory needs no flags and no environment.
+
+- **The binary never stores a plaintext password.** `new` generates one, shows
+  it, hashes it; `serve` reads the hash. The flag/env path
+  (`--admin-route` + `STELA_ADMIN_PASSWORD`) still works and is what the older
+  checks use, but it is the fallback, not the normal way in.
+- **Both generated values use `getrandom`**, with rejection-free masking over a
+  32-character alphabet so every character stays equally likely. A modulo over
+  an alphabet whose length does not divide 256 would quietly shrink the search
+  space.
+- `new` **refuses an existing directory**: writing a config over a live blog
+  would replace its admin route and password and lock the owner out.
+
 **Next:** RBAC roles beyond "the admin is logged in" wait for a second kind of
-user to exist. `stela new` (generate the admin route, store the password hash)
-is the gap between this and a thing someone else can install.
+user to exist.
 
 Explicit NON-goals for the MVP — add only when a real user asks: comments,
 media library/uploads, multi-theme switching, plugins, multi-author,

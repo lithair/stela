@@ -69,8 +69,37 @@ struct Cli {
     command: Command,
 }
 
+/// What `stela new` writes and `stela serve` reads.
+///
+/// The password is not in here and never will be: only its Argon2id hash is.
+/// `stela new` prints the plaintext once and forgets it, so a stolen config
+/// gives an attacker a hash to grind rather than a way in.
+#[derive(Serialize, Deserialize)]
+struct Config {
+    admin_route: String,
+    admin_user: String,
+    admin_password_hash: String,
+    title: String,
+    description: String,
+    base_url: String,
+}
+
+const CONFIG_FILE: &str = "stela.toml";
+
 #[derive(Subcommand)]
 enum Command {
+    /// Create a new blog: a config, a random admin route, and a password.
+    New {
+        /// Directory to create. Must not already exist.
+        path: PathBuf,
+
+        #[arg(long, default_value = "editor")]
+        admin_user: String,
+
+        #[arg(long, default_value = "A stela")]
+        title: String,
+    },
+
     /// Serve the blog.
     Serve {
         #[arg(short, long, default_value = "3000")]
@@ -99,13 +128,13 @@ enum Command {
         /// and prints it. This is obscurity, not a lock — the session gate
         /// behind it is what actually protects the panel.
         #[arg(long)]
-        admin_route: String,
+        admin_route: Option<String>,
 
         /// Username for the admin panel. The password comes from
         /// STELA_ADMIN_PASSWORD, never from a flag: arguments are visible in
         /// `ps` output and land in shell history.
         #[arg(long)]
-        admin_user: String,
+        admin_user: Option<String>,
     },
 }
 
@@ -130,41 +159,101 @@ struct Site {
 async fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let Cli { command } = Cli::parse();
-    let Command::Serve {
-        port,
-        host,
-        data,
-        base_url,
-        title,
-        description,
-        admin_route,
-        admin_user,
-    } = command;
+    match Cli::parse().command {
+        Command::New {
+            path,
+            admin_user,
+            title,
+        } => scaffold(&path, &admin_user, &title),
+        Command::Serve {
+            port,
+            host,
+            data,
+            base_url,
+            title,
+            description,
+            admin_route,
+            admin_user,
+        } => {
+            serve(
+                port,
+                host,
+                data,
+                base_url,
+                title,
+                description,
+                admin_route,
+                admin_user,
+            )
+            .await
+        }
+    }
+}
 
-    // Refused rather than defaulted. A blog with an admin panel and no password
-    // is not a degraded blog, it is a defaced one waiting to happen, so the
-    // binary does not start without a way to lock it.
-    let admin_password = std::env::var("STELA_ADMIN_PASSWORD").map_err(|_| {
-        anyhow::anyhow!(
-            "STELA_ADMIN_PASSWORD is not set. The admin panel needs a password, and it \
-             is read from the environment rather than a flag so it stays out of `ps` \
-             output and shell history."
-        )
-    })?;
+#[allow(clippy::too_many_arguments)] // one per CLI flag; a struct would only move them
+async fn serve(
+    port: u16,
+    host: String,
+    data: PathBuf,
+    base_url: String,
+    title: String,
+    description: String,
+    admin_route: Option<String>,
+    admin_user: Option<String>,
+) -> Result<()> {
+    // stela.toml if there is one, flags otherwise. `stela new` writes the file
+    // so a person never has to hold a route and a password in their head just
+    // to start their own blog.
+    let config = load_config()?;
+
+    let admin_route = admin_route
+        .or_else(|| config.as_ref().map(|c| c.admin_route.clone()))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no admin route: pass --admin-route, or run `stela new <dir>` and serve \
+                 from that directory. There is deliberately no default — a predictable \
+                 admin path is one every scanner already knows."
+            )
+        })?;
     if !admin_route.starts_with('/') {
         anyhow::bail!("--admin-route must start with '/' (got {admin_route:?})");
     }
-    // Hashed here rather than handed over in the clear. RbacUser::new would do
-    // it too, but this keeps the plaintext's lifetime to these three lines.
-    let admin_password_hash = lithair_core::security::hash_password(&admin_password)
-        .map_err(|e| anyhow::anyhow!("could not hash the admin password: {e}"))?;
-    drop(admin_password);
+    let admin_user = admin_user
+        .or_else(|| config.as_ref().map(|c| c.admin_user.clone()))
+        .unwrap_or_else(|| "editor".to_string());
+
+    // The hash from the config if there is one — that is the path where this
+    // binary never sees the plaintext at all. Otherwise the environment, hashed
+    // here and dropped three lines later. Refused rather than defaulted either
+    // way: a blog with an admin panel and no password is not a degraded blog,
+    // it is a defaced one waiting to happen.
+    let admin_password_hash = match config.as_ref() {
+        Some(c) => c.admin_password_hash.clone(),
+        None => {
+            let admin_password = std::env::var("STELA_ADMIN_PASSWORD").map_err(|_| {
+                anyhow::anyhow!(
+                    "STELA_ADMIN_PASSWORD is not set and there is no {CONFIG_FILE} here. \
+                     The admin panel needs a password, and it is read from the environment \
+                     rather than a flag so it stays out of `ps` output and shell history."
+                )
+            })?;
+            let hash = lithair_core::security::hash_password(&admin_password)
+                .map_err(|e| anyhow::anyhow!("could not hash the admin password: {e}"))?;
+            drop(admin_password);
+            hash
+        }
+    };
 
     let site = Site {
-        title,
-        description,
-        base_url,
+        title: config.as_ref().map(|c| c.title.clone()).unwrap_or(title),
+        description: config
+            .as_ref()
+            .map(|c| c.description.clone())
+            .unwrap_or(description),
+        base_url: config
+            .as_ref()
+            .map(|c| c.base_url.clone())
+            .unwrap_or(base_url),
     };
     let posts_dir = data.join("posts").to_string_lossy().to_string();
 
@@ -421,6 +510,105 @@ async fn rebuild(engine: &FrontendEngine, posts_dir: &str, site: &Site) -> Resul
 
     log::info!("rebuilt {} published post(s)", posts.len());
     Ok(posts.len())
+}
+
+/// Read `stela.toml` from the working directory, if there is one.
+fn load_config() -> Result<Option<Config>> {
+    let path = std::path::Path::new(CONFIG_FILE);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("could not read {CONFIG_FILE}: {e}"))?;
+    let config: Config =
+        toml::from_str(&text).map_err(|e| anyhow::anyhow!("{CONFIG_FILE} is not valid: {e}"))?;
+    Ok(Some(config))
+}
+
+/// Create a new blog: a directory, a config, a random admin route and a
+/// random password.
+///
+/// The password is printed once and never stored — only its Argon2id hash goes
+/// into the config. That is the whole reason this command exists rather than
+/// leaving people to invent a route and export a variable: both of the values
+/// that matter are generated unguessable, and the secret one is never written
+/// down by the machine.
+fn scaffold(path: &std::path::Path, admin_user: &str, title: &str) -> Result<()> {
+    if path.exists() {
+        anyhow::bail!(
+            "{} already exists. Refusing to write into it — generating a config over \
+             an existing blog would replace its admin route and password, locking the \
+             owner out of their own site.",
+            path.display()
+        );
+    }
+
+    let admin_route = format!("/secure-{}", random_token(6));
+    let password = random_token(12);
+    let admin_password_hash = lithair_core::security::hash_password(&password)
+        .map_err(|e| anyhow::anyhow!("could not hash the generated password: {e}"))?;
+
+    let config = Config {
+        admin_route: admin_route.clone(),
+        admin_user: admin_user.to_string(),
+        admin_password_hash,
+        title: title.to_string(),
+        description: String::new(),
+        base_url: "http://localhost:3000".to_string(),
+    };
+
+    std::fs::create_dir_all(path)
+        .map_err(|e| anyhow::anyhow!("could not create {}: {e}", path.display()))?;
+    let body = format!(
+        "# Written by `stela new`. The password is NOT here — only its Argon2id\n\
+         # hash. If you lose it, generate a new blog or replace the hash by hand.\n\
+         {}",
+        toml::to_string_pretty(&config)?
+    );
+    std::fs::write(path.join(CONFIG_FILE), body)
+        .map_err(|e| anyhow::anyhow!("could not write the config: {e}"))?;
+
+    // Deliberately not logged: log output goes to files, gets shipped to
+    // aggregators and outlives the terminal. This is printed, once.
+    println!("Created {}", path.display());
+    println!();
+    println!("Write these down now — the password is not stored anywhere:");
+    println!();
+    println!("Admin route: {admin_route}");
+    println!("Password: {password}");
+    println!("Username: {admin_user}");
+    println!();
+    println!("  cd {} && stela serve", path.display());
+    println!();
+    println!("The admin route is not a lock, it only keeps scanners from finding");
+    println!("the panel. Serve this over HTTPS.");
+
+    Ok(())
+}
+
+/// A random lowercase-alphanumeric token, from the OS random source.
+///
+/// Used for the admin route and the first password. Both are things a stranger
+/// must not be able to guess, so this is `getrandom` rather than a timestamp or
+/// a counter. Rejection sampling keeps every character equally likely — a plain
+/// modulo would quietly bias the alphabet and shrink the search space.
+fn random_token(len: usize) -> String {
+    const ALPHABET: &[u8] = b"abcdefghijkmnpqrstuvwxyz23456789";
+    let mut out = String::with_capacity(len);
+    let mut buf = [0u8; 32];
+    while out.len() < len {
+        getrandom::fill(&mut buf).expect("the OS random source must be available");
+        for b in buf {
+            if out.len() == len {
+                break;
+            }
+            // 256 is a multiple of 32, so masking is already unbiased here; the
+            // mask is kept explicit so a future alphabet change is obviously
+            // wrong rather than subtly skewed.
+            out.push(ALPHABET[(b & 0x1f) as usize] as char);
+        }
+    }
+    out
 }
 
 /// Every post in the store, unusable slugs already dropped.
