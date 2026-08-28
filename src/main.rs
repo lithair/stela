@@ -148,6 +148,36 @@ const SESSION_HOURS: u64 = 12;
 /// ruinous for a script working through a wordlist.
 const LOGIN_QPS: u64 = 10;
 
+/// The blog's own name and address, as a model so the admin can change them.
+///
+/// Presentation lives here rather than in `stela.toml` because it is what the
+/// person who logged in should be able to edit; the config file keeps identity
+/// and access — the admin route, the user, the password hash — which have to
+/// exist before anyone can log in at all.
+///
+/// A single row, keyed on a constant. A blog has one identity, and a model with
+/// exactly one instance is simpler to reason about than a settings table nobody
+/// will ever add a second row to.
+#[derive(Debug, Clone, Serialize, Deserialize, DeclarativeModel)]
+struct SiteSettings {
+    #[http(expose)]
+    #[db(primary_key)]
+    id: String,
+
+    #[http(expose)]
+    title: String,
+
+    #[http(expose)]
+    description: String,
+
+    /// Absolute URL of the site, used for the links in the feed.
+    #[http(expose)]
+    base_url: String,
+}
+
+/// The only key `SiteSettings` is ever stored under.
+const SITE_ID: &str = "site";
+
 /// Everything the templates need that is not a post.
 #[derive(Clone, Serialize)]
 struct Site {
@@ -261,6 +291,7 @@ async fn serve(
             .unwrap_or(base_url),
     };
     let posts_dir = data.join("posts").to_string_lossy().to_string();
+    let settings_dir = data.join("settings").to_string_lossy().to_string();
 
     let engine = Arc::new(FrontendEngine::new("stela", data.join("frontend")).await?);
 
@@ -271,7 +302,7 @@ async fn serve(
 
     // Render before serving: `/` has to answer 200 from the first request, even
     // with no posts, or a readiness probe never passes.
-    rebuild(&engine, &posts_dir, &site).await?;
+    rebuild(&engine, &posts_dir, &settings_dir, &site).await?;
 
     log::info!("stela serving on http://{host}:{port}");
     log::info!("admin panel: http://{host}:{port}{admin_route} (user: {admin_user})");
@@ -295,12 +326,13 @@ async fn serve(
     let (dirty_tx, mut dirty_rx) = tokio::sync::mpsc::channel::<()>(1);
     let hook_engine = engine.clone();
     let hook_dir = posts_dir.clone();
+    let hook_settings = settings_dir.clone();
     let hook_site = site.clone();
     let hook_lock = rebuild_lock.clone();
     tokio::spawn(async move {
         while dirty_rx.recv().await.is_some() {
             let _guard = hook_lock.lock().await;
-            if let Err(e) = rebuild(&hook_engine, &hook_dir, &hook_site).await {
+            if let Err(e) = rebuild(&hook_engine, &hook_dir, &hook_settings, &hook_site).await {
                 log::error!("a rebuild triggered by a write failed: {e}");
             }
         }
@@ -308,6 +340,7 @@ async fn serve(
 
     let rebuild_engine = engine.clone();
     let rebuild_dir = posts_dir.clone();
+    let rebuild_settings = settings_dir.clone();
     let rebuild_site = site.clone();
     let route_lock = rebuild_lock.clone();
     let frontend_server = Arc::new(FrontendServer::new_scc2(engine.clone()));
@@ -402,6 +435,7 @@ async fn serve(
             })
         })
         .with_model::<Post>(posts_dir.clone(), "/api/posts")
+        .with_model::<SiteSettings>(settings_dir.clone(), "/api/settings")
         // lithair 1.8 (issue #70). Without it a post written through the REST
         // API is stored and invisible until somebody remembers to call rebuild
         // — which a headless client has no reason to know about. The hook runs
@@ -410,7 +444,16 @@ async fn serve(
         //
         // The hook must stay short and is not async, so it only signals; the
         // worker above does the work.
-        .on_mutation(Post::http_base_path(), move |event| {
+        .on_mutation(Post::http_base_path(), {
+            let tx = dirty_tx.clone();
+            move |event| {
+                log::info!("{} on {}, rebuilding", event.operation, event.model_name);
+                let _ = tx.try_send(());
+            }
+        })
+        // Renaming the blog changes every page, so it earns a rebuild exactly
+        // like publishing does.
+        .on_mutation(SiteSettings::http_base_path(), move |event| {
             log::info!("{} on {}, rebuilding", event.operation, event.model_name);
             let _ = dirty_tx.try_send(());
         })
@@ -420,13 +463,14 @@ async fn serve(
             move |_req| {
                 let engine = rebuild_engine.clone();
                 let dir = rebuild_dir.clone();
+                let settings = rebuild_settings.clone();
                 let site = rebuild_site.clone();
                 let lock = route_lock.clone();
                 Box::pin(async move {
                     // Waits rather than races: a caller asked for a rebuild and
                     // gets one, after whichever is in flight has finished.
                     let _guard = lock.lock().await;
-                    match rebuild(&engine, &dir, &site).await {
+                    match rebuild(&engine, &dir, &settings, &site).await {
                         Ok(n) => Ok(json(StatusCode::OK, &format!(r#"{{"rendered":{n}}}"#))),
                         Err(e) => {
                             log::error!("rebuild failed: {e}");
@@ -465,8 +509,15 @@ async fn serve(
 /// the event log from disk, so this sees writes made through the REST API even
 /// though that API owns its own handler inside the server. It is also why no
 /// Lithair change is needed to trigger a rebuild — see CLAUDE.md.
-async fn rebuild(engine: &FrontendEngine, posts_dir: &str, site: &Site) -> Result<usize> {
+async fn rebuild(
+    engine: &FrontendEngine,
+    posts_dir: &str,
+    settings_dir: &str,
+    fallback: &Site,
+) -> Result<usize> {
     let stored = load_posts(posts_dir).await?;
+    let site = load_site(settings_dir, fallback).await;
+    let site = &site;
 
     let now = chrono::Utc::now().to_rfc2822();
     let mut posts: Vec<serde_json::Value> = stored
@@ -644,6 +695,34 @@ fn random_token(len: usize) -> String {
         }
     }
     out
+}
+
+/// The blog's identity as stored, or what the config said if nothing is stored.
+///
+/// Never fails the rebuild: a blog whose settings cannot be read should still
+/// render under the name it booted with rather than not render at all.
+async fn load_site(settings_dir: &str, fallback: &Site) -> Site {
+    let stored = DeclarativeModelHandler::<SiteSettings>::new(settings_dir.to_string())
+        .await
+        .ok()
+        .map(|h| async move { h.get_all_data_json().await });
+
+    let found = match stored {
+        Some(fut) => serde_json::from_value::<Vec<SiteSettings>>(fut.await)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|s| s.id == SITE_ID),
+        None => None,
+    };
+
+    match found {
+        Some(s) => Site {
+            title: s.title,
+            description: s.description,
+            base_url: s.base_url,
+        },
+        None => fallback.clone(),
+    }
 }
 
 /// Every post in the store, unusable slugs already dropped.

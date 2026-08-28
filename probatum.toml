@@ -80,7 +80,12 @@ expect = 200
 
 [[check]]
 name = "serve starts and answers"
-run = "STELA_ADMIN_PASSWORD=hunter2 ./target/x86_64-unknown-linux-musl/release/stela serve --port 3000 --admin-route /secure-testroute --admin-user editor"
+# --data into the container's own /tmp, not the repo. The probatum container is
+# ephemeral, but the workspace is a mount: a server writing to ./data leaves its
+# event store behind for the next run, so a check that renames the blog makes
+# the check that asserts its original name fail the second time. Container-local
+# storage is wiped with the container.
+run = "STELA_ADMIN_PASSWORD=hunter2 ./target/x86_64-unknown-linux-musl/release/stela serve --port 3000 --admin-route /secure-testroute --admin-user editor --data /tmp/stela-data"
 ready = "http://127.0.0.1:3000/"
 timeout = 15
 
@@ -328,6 +333,51 @@ run = "sleep 1"
 name = "and it reached the site anyway"
 get = "http://127.0.0.1:3000/posts/sans-rebuild"
 contains = ["Publié sans rebuild"]
+
+# ── site settings: the blog's own name, editable without a restart ─────────
+# RED on purpose. CLAUDE.md has claimed since the first commit that "SiteSettings
+# feeds the Tera context, so admin edits (title, colors, menus) apply on the next
+# rebuild". That was an architecture decision nobody implemented: the title lives
+# in stela.toml and changing it means editing a file and restarting the process.
+#
+# The split this settles: stela.toml keeps identity and access — the admin route,
+# the user, the password hash, the things that must exist before anyone can log
+# in — and SiteSettings carries presentation, which the person who logged in can
+# change.
+
+# Reads are asserted through the rendered pages, not through GET /api/settings:
+# stela's catch-all `GET /*` serves the asset store and swallows GET on the
+# model routes, so the REST API is write-only from outside. That is a real gap
+# against the "point Astro at it" claim and is written up in CLAUDE.md rather
+# than half-fixed here.
+[[check]]
+name = "the blog is named in the pages it serves"
+get = "http://127.0.0.1:3000/"
+contains = ["Stela"]
+
+[[check]]
+name = "an editor can rename the blog"
+post = "http://127.0.0.1:3000/api/settings"
+body = '{"id":"site","title":"Le carnet de bord","description":"Notes prises en route","base_url":"http://127.0.0.1:3000"}'
+expect = 201
+
+[[check]]
+name = "rebuilding after the rename"
+post = "http://127.0.0.1:3000/secure-testroute/rebuild"
+expect = 200
+
+[[check]]
+name = "the new name is on the index"
+get = "http://127.0.0.1:3000/"
+contains = ["Le carnet de bord", "Notes prises en route"]
+
+# The feed carries the site's identity to every reader who subscribed, so it has
+# to follow the rename too — a title that only changes in one of the two is the
+# kind of half-applied edit nobody notices for months.
+[[check]]
+name = "and in the feed"
+get = "http://127.0.0.1:3000/rss.xml"
+contains = ["Le carnet de bord"]
 
 # ── and the session is what was doing the work ─────────────────────────────
 
