@@ -2,8 +2,10 @@
 
 **Single-binary blog engine. Your words, set in stone.**
 
-> ⚠️ In development — this 0.0.1 release reserves the crate name and announces
-> the project. Nothing usable ships yet.
+> ⚠️ Works, but unreleased. The engine below does what it says — you can
+> scaffold a blog, sign in, write and publish. What is not done is shipping it:
+> 0.0.1 on crates.io is still a name reservation, and no image is published
+> yet, so today it is `cargo build` or `docker build`.
 
 A *stela* is a standing stone bearing a public inscription — laws, poems,
 announcements. The blog of antiquity. Stela is the modern one: a blog engine
@@ -34,9 +36,27 @@ stela serve
 - **Headless when you want it.** The content API is plain REST; point Astro
   or anything else at it if a static front is your thing.
 
+## What works today
+
+```bash
+stela new myblog     # writes a config with a random admin route,
+                     # prints the route and a generated password once
+cd myblog && stela serve
+```
+
+Public reads, session-gated writes, a markdown editor, drafts, and an RSS feed.
+Every administrative surface — the editor, the rebuild, Lithair's dashboard,
+the login — hangs off one per-install random prefix, so a scanner walking the
+usual `/wp-admin` list finds nothing to authenticate against.
+
+There is also a `Dockerfile` that ships `FROM scratch`: the image holds the
+static binary and nothing else, so it has no shell and no distribution to track
+CVEs for.
+
 ## Status
 
-Design phase. Follow progress at
+Unreleased. Not deployed anywhere, not published to a registry, no tagged
+version. Follow progress at
 [github.com/lithair/stela](https://github.com/lithair/stela).
 
 ## License
