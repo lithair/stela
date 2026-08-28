@@ -35,27 +35,82 @@ publish.
   — its `new()` replays the event log from disk (`model_handler.rs:289`), so it
   sees writes made through the API — then renders and pushes every page.
   The admin's "publish" button calls `POST /api/posts` then the rebuild.
-  Automatic hot-reload (write triggers rebuild with no caller) WOULD need a
-  post-commit hook upstream in Lithair, which does not exist (`LifecycleAware`
-  is field policies only). That hook is a v0.2 comfort, never an MVP blocker.
-  UNVERIFIED: that the event store flushes synchronously on write — if it
-  buffers, the replay misses just-written posts. Check at implementation.
+  **Since lithair 1.8 a write also triggers its own rebuild** via `on_mutation`
+  (the hook this project asked for as lithair#70). The explicit route stays: the
+  editor calls it so a person gets a deterministic "it is live now" rather than
+  racing a background task, and a theme edit needs a rebuild with no write to
+  trigger it. The hook is what makes a headless client work — it has no reason
+  to know the rebuild endpoint exists.
+  **Rebuilds are serialised behind a mutex.** The route and the hook can both
+  want one at the same instant — saving in the editor triggers both — and two
+  concurrent rebuilds each open the event store, which fails with
+  `Failed to acquire entry lock`. This only appeared in CI: the race needs the
+  timing a loaded runner gives it, and passed locally every time.
+  Coalescing is the caller's job, as expected: a capacity-1 channel and
+  `try_send`, so a bulk import queues one rebuild rather than one per post.
+  Dropping a signal is safe precisely because `rebuild()` replays the whole
+  store — the pending rebuild renders whatever the newer write left behind.
+  VERIFIED 2026-07-27: the event store does flush synchronously on write. A
+  POST to `/api/posts` followed by `POST /admin/rebuild` renders the new post —
+  the throwaway handler's replay sees it. This was the architecture's main risk;
+  it is settled, and the probatum checks keep it that way.
+- **Pages are served by Lithair's `FrontendServer`, straight from SCC2 memory.**
+  Stela hand-rolled this for two releases and no longer does. `update_asset_with_mime`
+  (1.4, [lithair#193](https://github.com/lithair/lithair/issues/193)) makes the
+  content type travel with the asset, which matters because a blog's URLs have
+  no extension for detection to work from; and a miss now returns the theme's
+  `/404.html` (1.6, [lithair#206](https://github.com/lithair/lithair/pull/206))
+  instead of the framework's built-in page. Both gaps were found here and fixed
+  upstream. Do not reintroduce a local serving route without a reason neither
+  of those covers.
 - **Theme = a folder of Tera templates + CSS**, read at every rebuild (so a
   template edit needs a rebuild, not a restart). Pitch
   "Tera syntax, porting a Zola theme is reasonable work" — do NOT promise
   "Zola-theme compatible" (its built-ins `get_section`, shortcodes, taxonomies
   would each need reimplementing; add the top 2-3 only when a real port asks).
+- **A post's markdown is rendered with raw HTML escaped, not passed through.**
+  pulldown-cmark emits `Event::Html` and `Event::InlineHtml` untouched, so a
+  body containing `<script>` would run in the browser of every reader of the
+  public site — stored XSS reachable by whoever can publish. Those events become
+  text. It removes an ability nobody asked for, and it is what keeps the
+  "multi-author, not yet" line in the non-goals from turning into a hole the day
+  it lands. Raw HTML in posts, if it is ever really wanted, needs an explicit
+  per-post opt-in and a sanitiser — never a silent pass-through.
 - **Content models: `Post`, `Page`, `SiteSettings`** via
   `#[derive(DeclarativeModel)]`. Public read / RBAC write is the canonical
   Lithair pattern (see lithair's rbac-session example). `SiteSettings` feeds
   the Tera context, so admin edits (title, colors, menus) apply on the next
   rebuild — which the admin triggers as part of saving.
-- **Admin lives at a per-install random route** — `/secure-xxxxxxx`, generated
-  once by `stela new` and printed for the user to write down. This is
-  defense-in-depth against drive-by scanners, NOT authentication: a URL leaks
-  through Referer headers, browser history, and proxy logs. The session/RBAC
-  gate stays mandatory behind it. Print that caveat where the route is shown,
-  so nobody treats the secret URL as the lock.
+- **No administrative surface at a guessable path. This is the product's
+  security posture, not a detail.** WordPress taught the internet that
+  `/wp-admin` exists on millions of hosts, and every scanner walks that list all
+  day. Stela is the opposite: the editor, the rebuild, Lithair's dashboard and
+  the data admin all hang off one per-install prefix
+  (`/secure-xxxxxxx/…`), so a scanner finds nothing to even authenticate
+  against. `/admin`, `/wp-admin`, `/login`, `/auth/login` and the framework's
+  own default paths return 404, and there are checks that say so.
+  **The login moved under the prefix too, and that was the point.** Leaving it
+  at a fixed path left exactly one unauthenticated oracle anyone could point a
+  wordlist at while knowing nothing — the wp-admin shape, rebuilt. Now the only
+  endpoint that answers without a session is `<prefix>/login`, reachable solely
+  by someone who already has the prefix.
+  The secret prefix is defence in depth, NOT authentication — a URL leaks
+  through Referer headers, browser history and proxy logs — so the session gate
+  behind it stays mandatory, and the startup banner says exactly that where the
+  route is printed.
+- **Use Lithair's security, do not reimplement it.** Stela is meant to be a
+  showcase of the framework, so the gating is Lithair's:
+  `with_models_require_session` for `/api/*`, `RouteGuard::RequireAuth` on the
+  prefix, `with_admin_panel` + `with_admin_path` for the dashboard,
+  `with_data_admin_ui` for the data admin (behind the `admin-ui` feature),
+  `with_firewall_config` for rate limiting, Argon2 from
+  `lithair_core::security`. Reaching for a hand-rolled equivalent is a bug in
+  the showcase before it is a bug in the code.
+- **What actually throttles the login is Argon2, not the firewall.** Measured:
+  ~336 ms per attempt on a debug build, so a wordlist gets single digits per
+  second and the rate limiter never trips. The firewall is scoped to
+  `<prefix>/login` — genuine defence in depth, since reaching it already means
+  knowing the prefix. Do not "optimise" the password comparison.
 - **One admin panel, the editor is a tab in it** — not a second "edit panel".
   A second panel means a second route, a second auth surface and a second
   thing to keep in sync, to buy a separation nobody has asked for yet. Split
@@ -78,12 +133,110 @@ publish.
   throughput ever disappoints, reach for jemalloc or mimalloc as the global
   allocator before abandoning static linking.
 
+## Shipping as a container
+
+`Dockerfile` builds in `clux/muslrust` and ships `FROM scratch` — the image
+contains the stripped binary and nothing else. 25 MB, no base distribution, no
+package manager, **no shell**. That is a security property before a size one:
+there is no shell to obtain and no distribution CVEs to track, because there is
+no distribution. It is the dividend of the static-musl decision.
+
+The cost, so it stays a choice: `docker exec` gives you nothing to run. Debug
+against the binary on a host, or temporarily swap the final stage for `alpine`.
+
+`docker-compose.yml` is the whole install:
+
+```bash
+docker compose run --rm stela new /blog   # once; prints route + password
+docker compose up -d
+```
+
+Three things that only showed up by running it:
+- **`CMD` passes `--host 0.0.0.0`.** The binary defaults to loopback, which is
+  right on a host and unreachable in a container.
+- **`user:` is numeric** (`${STELA_UID:-1000}`). `scratch` has no `/etc/passwd`
+  to resolve a name against, and it has to match whoever owns `./blog` or the
+  container cannot write its own data.
+- **`stela new` refuses an existing *blog*, not an existing directory.** A bind
+  mount always exists before the container runs, so the stricter rule made
+  `docker compose run stela new /blog` impossible.
+
+A bind mount rather than a named volume: the config and the event store are
+things an operator backs up and reads.
+
 ## MVP scope (and non-goals)
 
 MVP: `Post` (slug, title, markdown body, published flag), `Page`,
 `SiteSettings`, admin UI at the random route behind session/RBAC (markdown
 editor as a tab), one default theme (index, article, page, RSS + one CSS
 file), markdown via `pulldown-cmark`.
+
+**Shipped so far:** `Post` (slug as primary key, since the slug IS the URL),
+`stela serve`, the default theme compiled into the binary, markdown via
+`pulldown-cmark`, `/`, `/posts/:slug`, `/rss.xml`, `POST /api/posts`,
+`POST <prefix>/rebuild`, and
+session auth — `/auth/login`, `/auth/logout`, every write gated, the admin panel
+at the operator's own route.
+
+**Auth decisions, settled:**
+- `stela serve` **refuses to start** without `--admin-route` and
+  `STELA_ADMIN_PASSWORD`. No defaults: a predictable admin path is one every
+  scanner knows, and an unset password would mean an open panel. The password
+  comes from the environment, never a flag — arguments show up in `ps` and shell
+  history.
+- **Auth is Lithair's, not Stela's.** `with_auth_path(<prefix>)` +
+  `with_rbac_config` mount login, logout and validate under the prefix, hash
+  with Argon2id, and issue the session cookie a browser needs. Stela hand-rolled
+  all of this for one release; the hand-rolled version is gone (~140 lines and
+  the `getrandom` dependency). `with_auth_path` MUST be called before
+  `with_rbac_config` — those routes are registered as it runs, and a later call
+  only logs a warning.
+  Stela still hashes the password itself rather than passing the plaintext to
+  `RbacUser::new`, which keeps the plaintext's lifetime to three lines. When
+  `stela new` arrives it should store the hash and never see the plaintext.
+  The cookie's attributes are Lithair's `CookieConfig` defaults. `host_prefix`
+  (the `__Host-` prefix, which shuts down sub-domain shadowing) is available and
+  not yet turned on — worth doing once there is a deployment to verify it on.
+- Writes are gated by `with_models_require_session(true)` for `/api/*` and
+  `RouteGuard::RequireAuth` for `/admin/*` and the admin route. Public reads are
+  untouched — they are assets, not model routes.
+- Login failures never distinguish a bad username from a bad password, and
+  Argon2 verification runs either way so the two take the same time.
+
+**The editor is in.** The admin route serves a markdown editor: a form, the list
+of posts including drafts, and click-to-edit. It writes through the existing
+gated API (`POST /api/posts`, `PUT /api/posts/:slug`) and then calls
+`/admin/rebuild` — no second write path, because two handlers writing the same
+event store is a problem worth not creating.
+
+- The editor page is rendered **per request**, never pushed into the asset
+  store: assets are what `FrontendServer` hands the public, so an admin page
+  living there would be one routing mistake from world-readable. It also has to
+  show drafts, which by definition are not in the rendered site.
+- Posts are embedded in the page as JSON so clicking one fills the form without
+  a round trip. `</` is escaped there — inside a `<script>` the HTML parser
+  stops at the first `</script` wherever it appears, including inside a JS
+  string, so a post body containing it would otherwise close the block and run
+  as markup.
+
+**`stela new` is in, and it closes the install gap.** `stela new <dir>` writes
+`stela.toml` with a random admin route, the operator's username and an Argon2id
+hash — then prints the route and a generated password once and forgets both.
+`stela serve` in that directory needs no flags and no environment.
+
+- **The binary never stores a plaintext password.** `new` generates one, shows
+  it, hashes it; `serve` reads the hash. The flag/env path
+  (`--admin-route` + `STELA_ADMIN_PASSWORD`) still works and is what the older
+  checks use, but it is the fallback, not the normal way in.
+- **Both generated values use `getrandom`**, with rejection-free masking over a
+  32-character alphabet so every character stays equally likely. A modulo over
+  an alphabet whose length does not divide 256 would quietly shrink the search
+  space.
+- `new` **refuses an existing directory**: writing a config over a live blog
+  would replace its admin route and password and lock the owner out.
+
+**Next:** RBAC roles beyond "the admin is logged in" wait for a second kind of
+user to exist.
 
 Explicit NON-goals for the MVP — add only when a real user asks: comments,
 media library/uploads, multi-theme switching, plugins, multi-author,
@@ -117,47 +270,113 @@ Stela is the first project meant to run the maintainer's ENTIRE toolchain,
 one tool per lifecycle phase — integrate in this order, and never gate the
 MVP on the later ones:
 
-1. **lithair** (runtime — day 1, it IS the product) — NOT WIRED YET
-2. **cidx** (CI) — ✅ WIRED. `cidx.toml` generated by `cidx init`, minus the
-   auto-added `prettier` (Rust-only repo; its sole target was the
-   hand-wrapped Markdown). Phase `code` is green.
-3. **probatum** (`~/projects/probatum`) — ✅ WIRED. `probatum.yaml` is thin on
-   purpose: today the binary only prints a banner. It grows into the real
-   E2E smoke the moment `stela serve` exists — start, GET `/`, validate RSS.
+1. **lithair** (runtime) — ✅ WIRED, it IS the product. `lithair-core` 1.3 from
+   crates.io.
+2. **cidx** (CI) — ✅ WIRED, v3.2.0. `cidx.toml` plus one project preset in
+   `.cidx/presets.toml`. `.github/workflows/cidx.yml` is now generated with NO
+   hand patches: regenerate freely with
+   `cidx generate github -o .github/workflows/cidx.yml --force`.
+3. **probatum** (`~/projects/probatum`) — ✅ WIRED, 0.8.0. `probatum.toml`
+   (TOML `[[check]]` tables since 0.8 — it was YAML before) drives the six
+   behaviour checks that define the first slice.
 4. **configorator** (`~/projects/configurator/configorator`, provisioning +
    deploy from one YAML — adopt last; "one sync to your VPS" is the closing
    act of the demo, not the opening)
 
-**Division of labour — keep it, it prevents duplicate checks:**
-cidx owns code quality (clippy, rustfmt, audit, secrets, commit format).
-probatum owns behaviour (does the binary DO what it claims). A check belongs
-in exactly one of them.
+**Division of labour — keep it sharp, it prevents duplicate checks:**
+- **cidx** owns code quality: clippy, rustfmt, audit, secrets, commit format.
+- **probatum** owns HTTP behaviour: does the binary DO what it claims.
+- **Playwright** (`e2e/`) owns **only what needs a browser** — the editor's
+  JavaScript and the human path through the login form. It must never
+  re-assert a status probatum already covers: browser tests are slow and
+  flaky, so they go only where nothing else can reach.
+
+A check belongs in exactly one of the three. Node is a **test** dependency and
+never a runtime one; what ships is a static binary in an image with no shell.
+
+**The browser tier paid for itself on its first run.** Tera auto-escapes `/` as
+`&#x2F;` in `.html` templates, and inside a `<script>` the HTML parser does not
+decode entities — so the login page's `fetch("{{ admin_route }}/login")` had
+been posting to `/secure-xxx/&` since the page was written. **No human could
+sign in, and 44 probatum checks never saw it**, because none of them execute a
+page. The fix is `| safe` on those interpolations, earned by `route_is_safe`
+validating the admin route against the same alphabet as a slug.
+This is the second time the same escaping trap has bitten — the first was the
+RSS feed's URLs. Interpolating a URL into a template here needs `| safe` plus a
+validated value; assume nothing else is right.
 
 Every friction found in any of the four is an upstream issue to file/fix —
 that's half the point. Workflow: draft the issue in chat, get it approved,
 then post with `gh issue create`.
 
-**Upstream issues filed from this project:**
-- [cidx#190](https://github.com/cidx-org/cidx/issues/190) — `cidx doctor`
-  passed on Podman while the Podman executor did not exist. **CLOSED**, fixed
-  by cidx#191, shipped in v2.1.1 the same day.
-- [cidx#193](https://github.com/cidx-org/cidx/issues/193) — cidx's `go.mod`
-  has no `/v2` suffix, so `go install ...@latest` (what every generated
-  workflow runs) silently installs **v1.8.0**, and no v2.x is installable at
-  all. This is why `.github/workflows/cidx.yml` has a HAND-PATCHED bootstrap
-  that clones and builds from source. Re-apply it after every
-  `cidx generate github`.
-- [cidx#194](https://github.com/cidx-org/cidx/issues/194) — the stock
-  `cargo-audit` preset unpacks into `/usr/local/bin` while containers run
-  non-root; the security phase exits 2. Overridden in cidx.toml.
-- [cidx#195](https://github.com/cidx-org/cidx/issues/195) — the `probatum`
-  preset's Alpine image cannot execute the glibc binary the `cargo-build`
-  preset produces. Worked around by the musl build in `.cidx/presets.toml`.
-  Also covers the custom-preset docs omitting `workdir`/`volumes`, and cidx
-  container names not being scoped per project.
+**Upstream issues filed from this project — eleven, ten already closed**, plus
+four PRs written from here (lithair#206, #212, #216, #219). Every workaround
+they justified has been deleted, and the three that remain open are limits on
+what a check can *say*, not code this repo carries. That is the point of
+tracking them here rather than letting them calcify into "how stela does
+things".
 
-Drop each workaround when its issue closes — that is the point of tracking
-them here rather than letting them calcify into "how stela does things".
+Closed and shipped, nothing left in this repo:
+- [cidx#190](https://github.com/cidx-org/cidx/issues/190) — `doctor` passed on
+  Podman while the Podman executor did not exist. Fixed in v2.1.1.
+- [cidx#193](https://github.com/cidx-org/cidx/issues/193) — `go.mod` had no
+  `/v2` suffix, so every generated workflow silently installed v1.8.0. The
+  bootstrap now emits `.../v3/cmd/cidx@v3.2.0`, pinned. The hand-patched
+  clone-and-build bootstrap is gone.
+- [cidx#194](https://github.com/cidx-org/cidx/issues/194) — `cargo-audit`
+  unpacked into `/usr/local/bin` under a non-root container. The preset now
+  unpacks to `/tmp` with `HOME`/`CARGO_HOME` redirected; our override is gone.
+- [cidx#195](https://github.com/cidx-org/cidx/issues/195) — a preset producing
+  a binary its own runner cannot execute. Fixed for the Go preset and
+  documented for the confusing `not found` message.
+- [cidx#207](https://github.com/cidx-org/cidx/issues/207) — generated workflows
+  had no `permissions` block and no `persist-credentials: false`. Both are
+  defaults now, so the workflow is regenerable with no hand patches at all.
+- [probatum#1](https://github.com/probatum-org/probatum/issues/1) — HTTP checks
+  were GET-only, forcing `run: curl` for any write. Shipped as `post` in 0.2.0.
+
+- [probatum#5](https://github.com/probatum-org/probatum/issues/5) — nothing
+  carried from one check to the next, so an authenticated sequence could not be
+  expressed. Shipped as a per-run cookie jar in 0.9.0. The division of labour
+  never had to bend: the authenticated round trip stayed in `probatum.toml` and
+  the Rust integration test was never written.
+- [lithair#193](https://github.com/lithair/lithair/issues/193) — no way to set
+  an asset's MIME type; extensionless clean URLs defaulted to octet-stream.
+  Fixed by `update_asset_with_mime` in lithair-core 1.4.0.
+- [lithair#206](https://github.com/lithair/lithair/pull/206) — a PR, not an
+  issue: `FrontendServer` answered every miss with a hardcoded page and offered
+  no way to replace it. A site that stores `/404.html` now gets it back.
+  Merged, shipped in 1.6.0. Together with #193 this deleted `serve_page`
+  entirely — 43 lines and the `hyper` direct dependency.
+
+- [cidx#434](https://github.com/cidx-org/cidx/issues/434) — containers were
+  reused unless the config hash changed, and the only override was the global
+  `CIDX_NO_REUSE`, which also discards the Rust build cache. A container that
+  mutates the filesystem could not declare it needed a fresh one, so a
+  scaffolding check would have asserted against the previous run's leftovers
+  and passed. Shipped in cidx 3.3.0 as `ephemeral`, and the `probatum` preset
+  declares it — nothing to configure here, and the defensive `rm -rf` this
+  would have forced is not needed. Verified: the container is recreated every
+  run even with our image override in place, so an override merges rather than
+  replaces.
+
+**Preset images are pinned by digest upstream, so they lag by design.** cidx
+bumps its `probatum` preset one commit per probatum release; between the two,
+override the image in `cidx.toml` (the probatum repo does the same in its own
+`.cidx/presets.toml`). Currently overridden to 0.9.0 for the cookie jar.
+
+Closed but the practice stays because it is better anyway:
+- [probatum#2](https://github.com/probatum-org/probatum/issues/2) — checks
+  against `localhost` failed when it resolved to `::1` and the server bound
+  IPv4. `probatum.toml` names `127.0.0.1` explicitly, which beats depending on
+  resolver order regardless.
+
+**Not an issue, a self-inflicted one worth remembering:** the musl build
+redirects `CARGO_HOME` into the workspace, so ~300 MB of crate sources sit in
+`.cargo/`. Trivy read the `Cargo.lock` files that ship *inside* those crates and
+reported advisories for versions this project does not use (aws-lc-sys 0.31.0,
+while we resolve 0.43.0). The trivy override in cidx.toml skips `.cargo` and
+`target`. Check what a scanner is actually reading before believing it.
 
 ## Commands
 
@@ -172,8 +391,11 @@ cidx validate          # check cidx.toml
 cidx doctor            # verify the environment (see the podman caveat above)
 
 probatum run           # behaviour checks; evidence in .probatum/runs/NNNN/
+
+cidx generate github -o .github/workflows/cidx.yml --force   # safe to rerun
 ```
 
-cidx needs a running Docker daemon — podman is detected but unsupported.
-`probatum` is installed from the local checkout
+cidx needs a running Docker daemon; `doctor` now warns rather than passing when
+only Podman is present. `probatum` is installed from the local checkout
 (`cargo install --path ~/projects/probatum`); it is not on crates.io yet.
+Its config is `probatum.toml` — TOML `[[check]]` tables since 0.8, YAML before.

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Editor — {{ site.title }}</title>
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1><a href="/">{{ site.title }}</a></h1>
+      <p class="tagline">Editor · <code>{{ admin_route }}</code></p>
+    </header>
+
+    <main>
+      <form id="editor" class="editor">
+        <label>
+          Slug
+          <input name="slug" required pattern="[a-z0-9_-]+" placeholder="my-first-post" />
+        </label>
+        <label>
+          Title
+          <input name="title" required placeholder="My first post" />
+        </label>
+        <label>
+          Body
+          <textarea name="body" rows="18" placeholder="# Markdown goes here"></textarea>
+        </label>
+        <label class="inline">
+          <input type="checkbox" name="published" />
+          Published — leave it off to keep this a draft
+        </label>
+        <button type="submit">Save and publish</button>
+        <p id="status" class="empty" role="status"></p>
+      </form>
+
+      <h2>Posts</h2>
+      {% if posts %}
+        <ul class="posts">
+          {% for post in posts %}
+            <li>
+              <a href="#" data-slug="{{ post.slug }}">{{ post.title }}</a>
+              <code>{{ post.slug }}</code>
+              {% if not post.published %}<em>draft</em>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">Nothing written yet.</p>
+      {% endif %}
+    </main>
+
+    <footer>
+      <a href="/">← Back to the blog</a> ·
+      <a href="#" id="logout">Log out</a>
+    </footer>
+
+    <script>
+      // The posts above are rendered server-side and carry their body, so
+      // clicking one fills the form without another round trip.
+      const POSTS = {{ posts_json | safe }};
+      const form = document.getElementById("editor");
+      const status = document.getElementById("status");
+
+      document.querySelectorAll("[data-slug]").forEach((link) =>
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          const post = POSTS.find((p) => p.slug === link.dataset.slug);
+          if (!post) return;
+          form.slug.value = post.slug;
+          form.title.value = post.title;
+          form.body.value = post.body;
+          form.published.checked = post.published;
+          status.textContent = "Editing " + post.slug;
+        })
+      );
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const known = POSTS.some((p) => p.slug === form.slug.value);
+        const post = {
+          slug: form.slug.value,
+          title: form.title.value,
+          body: form.body.value,
+          published: form.published.checked,
+        };
+        status.textContent = "Saving…";
+        try {
+          // Create is a POST on the collection; changing one is a PUT on its
+          // slug. The session cookie rides along on both.
+          const write = await fetch(
+            known ? "/api/posts/" + encodeURIComponent(post.slug) : "/api/posts",
+            {
+              method: known ? "PUT" : "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(post),
+            }
+          );
+          if (!write.ok) throw new Error("save failed (" + write.status + ")");
+
+          // Writing stores the post; rendering it is a separate step. Both have
+          // to succeed or the site shows something other than what was saved.
+          const build = await fetch("{{ admin_route | safe }}/rebuild", { method: "POST" });
+          if (!build.ok) throw new Error("saved, but the rebuild failed (" + build.status + ")");
+
+          location.reload();
+        } catch (err) {
+          status.textContent = String(err.message || err);
+        }
+      });
+
+      document.getElementById("logout").addEventListener("click", async (e) => {
+        e.preventDefault();
+        await fetch("{{ admin_route | safe }}/logout", { method: "POST" });
+        location.href = "/";
+      });
+    </script>
+  </body>
+</html>

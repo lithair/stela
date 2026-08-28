@@ -1,0 +1,357 @@
+# probatum checks stela's behaviour — what the binary DOES.
+# Code quality (clippy, rustfmt, audit) belongs to cidx; no overlap.
+#
+#   cargo build --release --target x86_64-unknown-linux-musl && probatum run
+#
+# Building is deliberately NOT a check here: cidx runs probatum from a minimal
+# image with no Rust toolchain, and producing the artifact is a build
+# container's job. cidx.toml puts cargo-build-musl ahead of probatum inside the
+# test phase so the binary exists when this runs.
+#
+# The musl target is not a preference: it is what stela ships, and probatum's
+# image is Alpine and could not execute a glibc binary anyway.
+#
+# 127.0.0.1 rather than localhost is deliberate — stela binds IPv4 by default,
+# and naming the address a check targets beats relying on resolver order
+# (probatum-org/probatum#2).
+#
+# ── the auth slice, written before the code ────────────────────────────────
+# RED on purpose. The order matters twice over: probatum stops at the first
+# failure, and the cookie jar (0.9.0, probatum-org/probatum#5) accumulates
+# across the run — so everything above "logging in" is genuinely anonymous,
+# and everything below it is genuinely authenticated. The last check logs out
+# and retries a write, which is what proves the session was doing the work
+# rather than the endpoint being open all along.
+
+# ── stela new: the gap between "it works here" and "someone else can install it"
+# ─────────────────────────────────────────────────────────────────────────────
+# RED on purpose. These run before the server checks because they are about a
+# blog that does not exist yet, and they need no session.
+#
+# No `rm -rf` guarding them: the probatum preset declares itself ephemeral
+# (cidx#434, shipped in cidx 3.3.0), so the container has never seen a previous
+# run. That is the runner guaranteeing clean state rather than each check
+# defending itself.
+
+[[check]]
+name = "stela new scaffolds a blog and says what to write down"
+run = "./target/x86_64-unknown-linux-musl/release/stela new /tmp/blog-a"
+contains = ["/secure-", "Write these down", "Password:"]
+
+[[check]]
+name = "the admin route is actually random, not a fixed string"
+# Two blogs, two routes. If this ever passes by accident the whole security
+# posture is a lie, so it compares them rather than trusting the word "random".
+run = "./target/x86_64-unknown-linux-musl/release/stela new /tmp/blog-b >/dev/null && A=$(grep admin_route /tmp/blog-a/stela.toml) && B=$(grep admin_route /tmp/blog-b/stela.toml) && test \"$A\" != \"$B\""
+
+[[check]]
+name = "what is stored is an argon2 hash"
+run = "grep -q 'argon2id' /tmp/blog-a/stela.toml"
+
+[[check]]
+name = "the password it printed is nowhere in the config"
+# The point of the whole exercise: the plaintext is shown once and never
+# written. This regenerates one, captures the password, and greps for it.
+run = "./target/x86_64-unknown-linux-musl/release/stela new /tmp/blog-c > /tmp/new-c.txt && P=$(grep -i 'password:' /tmp/new-c.txt | tr -s ' ' | cut -d' ' -f2) && test -n \"$P\" && ! grep -qF \"$P\" /tmp/blog-c/stela.toml"
+
+# The rule is about an existing BLOG, not an existing directory: a bind-mounted
+# volume always exists before the container runs, so refusing on existence alone
+# would make `docker compose run stela new /blog` impossible — the normal way to
+# install this. Found by running it, not by reading it.
+[[check]]
+name = "scaffolding into an empty directory is fine"
+run = "mkdir -p /tmp/blog-empty && ./target/x86_64-unknown-linux-musl/release/stela new /tmp/blog-empty"
+contains = ["/secure-"]
+
+[[check]]
+name = "but never over an existing blog"
+run = "./target/x86_64-unknown-linux-musl/release/stela new /tmp/blog-a; test $? -ne 0"
+
+[[check]]
+name = "the generated blog starts with no flags at all"
+run = "cd /tmp/blog-a && /work/target/x86_64-unknown-linux-musl/release/stela serve --port 3002"
+ready = "http://127.0.0.1:3002/"
+timeout = 15
+
+[[check]]
+name = "and it serves a real site"
+get = "http://127.0.0.1:3002/rss.xml"
+expect = 200
+
+[[check]]
+name = "serve starts and answers"
+run = "STELA_ADMIN_PASSWORD=hunter2 ./target/x86_64-unknown-linux-musl/release/stela serve --port 3000 --admin-route /secure-testroute --admin-user editor"
+ready = "http://127.0.0.1:3000/"
+timeout = 15
+
+# ── public reads stay public ───────────────────────────────────────────────
+
+[[check]]
+name = "the index is readable without a session"
+get = "http://127.0.0.1:3000/"
+expect = 200
+
+[[check]]
+name = "the feed is readable without a session"
+get = "http://127.0.0.1:3000/rss.xml"
+expect = 200
+
+# ── every write is refused without a session ───────────────────────────────
+
+[[check]]
+name = "publishing without a session is refused"
+post = "http://127.0.0.1:3000/api/posts"
+body = '{"slug":"sneaky","title":"Nope","body":"x","published":true}'
+expect = 401
+
+[[check]]
+name = "rebuilding without a session is refused"
+post = "http://127.0.0.1:3000/secure-testroute/rebuild"
+expect = 401
+
+# The wp-admin lesson, stated as a check: there is no admin surface at a path
+# anyone can guess. Everything administrative hangs off the operator's own
+# prefix, so a scanner walking the usual list finds nothing to even authenticate
+# against.
+[[check]]
+name = "no admin surface at the paths every scanner tries"
+get = "http://127.0.0.1:3000/admin"
+expect = 404
+
+[[check]]
+name = "and none at wp-admin either"
+get = "http://127.0.0.1:3000/wp-admin"
+expect = 404
+
+# The login was the last thing left at a fixed path, which made it the one
+# unauthenticated oracle anyone could point a wordlist at without knowing
+# anything. It moved under the prefix with everything else.
+[[check]]
+name = "there is no login at a guessable path"
+post = "http://127.0.0.1:3000/auth/login"
+body = '{"username":"editor","password":"hunter2"}'
+expect = 404
+
+[[check]]
+name = "nor at the other name everyone tries"
+get = "http://127.0.0.1:3000/login"
+expect = 404
+
+[[check]]
+name = "the framework dashboard is not at its default path"
+get = "http://127.0.0.1:3000/admin/panel"
+expect = 404
+
+# ── the admin panel is behind both the route and the session ───────────────
+
+[[check]]
+name = "the admin route is not guessable"
+get = "http://127.0.0.1:3000/secure-wrongroute"
+expect = 404
+
+[[check]]
+name = "the admin route still demands a session"
+get = "http://127.0.0.1:3000/secure-testroute"
+expect = 401
+
+# Knowing the prefix gets you a login form and nothing else. It has to be
+# reachable without a session — it is how a human signs in — which makes it the
+# single unauthenticated endpoint in the binary, behind a path nobody can guess.
+[[check]]
+name = "the prefix serves a login form"
+get = "http://127.0.0.1:3000/secure-testroute/login"
+contains = ["<form", 'name="username"', 'name="password"']
+
+# ── logging in ─────────────────────────────────────────────────────────────
+
+[[check]]
+name = "bad credentials are refused"
+post = "http://127.0.0.1:3000/secure-testroute/login"
+body = '{"username":"editor","password":"wrong"}'
+expect = 401
+
+[[check]]
+name = "good credentials open a session"
+post = "http://127.0.0.1:3000/secure-testroute/login"
+body = '{"username":"editor","password":"hunter2"}'
+expect = 200
+
+# ── authenticated from here: the jar replays the session cookie ────────────
+
+[[check]]
+name = "the admin panel opens with a session"
+get = "http://127.0.0.1:3000/secure-testroute"
+expect = 200
+
+[[check]]
+name = "a logged-in editor can publish"
+post = "http://127.0.0.1:3000/api/posts"
+body = '{"slug":"hello","title":"Premier post","body":"# Salut","published":true}'
+expect = 201
+
+[[check]]
+name = "a logged-in editor can rebuild"
+post = "http://127.0.0.1:3000/secure-testroute/rebuild"
+expect = 200
+
+[[check]]
+name = "the published post is on the index"
+get = "http://127.0.0.1:3000/"
+contains = ["Premier post"]
+
+# Raw HTML in a body must reach the reader as text, never as markup: the
+# rendered page is public, so a <script> there would run in every reader's
+# browser, and pulldown-cmark passes it through by default.
+[[check]]
+name = "raw html in a post is accepted"
+post = "http://127.0.0.1:3000/api/posts"
+body = '{"slug":"pas-de-script","title":"Inoffensif","body":"<script>alert(1)</script>","published":true}'
+expect = 201
+
+[[check]]
+name = "rebuilding after the raw html post"
+post = "http://127.0.0.1:3000/secure-testroute/rebuild"
+expect = 200
+
+[[check]]
+name = "and the reader gets escaped text, not a script"
+get = "http://127.0.0.1:3000/posts/pas-de-script"
+contains = ["&lt;script&gt;"]
+
+[[check]]
+name = "the post has its own page, markdown rendered"
+get = "http://127.0.0.1:3000/posts/hello"
+contains = ["Premier post", "<h1>Salut</h1>"]
+
+[[check]]
+name = "the feed lists it"
+get = "http://127.0.0.1:3000/rss.xml"
+contains = ["<rss", "Premier post", "/posts/hello"]
+
+# The anonymous POST above was refused; this proves it was refused BEFORE the
+# write, not merely unrendered. A rebuild has just run, so a stored post would
+# have a page by now.
+[[check]]
+name = "the refused post never reached the store"
+get = "http://127.0.0.1:3000/posts/sneaky"
+expect = 404
+
+# ── the editor tab ─────────────────────────────────────────────────────────
+# RED on purpose. The panel currently serves a landing page; it should serve the
+# editor. The UI assertions are shallow by necessity — probatum has no browser,
+# so it can say the form is there, not that it works.
+#
+# Editing and unpublishing an EXISTING post are the behaviours this slice really
+# adds, and neither is expressible: the framework routes updates through PUT or
+# PATCH (POST on the collection means create), probatum has no key for either,
+# and `run: curl -X PUT` does not share the cookie jar so it would be anonymous.
+# Filed as probatum-org/probatum#7. What IS provable today is the half that
+# leaks if it breaks: a post that is not published must not be readable.
+
+[[check]]
+name = "the admin panel serves the editor"
+get = "http://127.0.0.1:3000/secure-testroute"
+contains = ['name="slug"', 'name="title"', 'name="body"', "<textarea"]
+
+[[check]]
+name = "the editor lists what is already published"
+get = "http://127.0.0.1:3000/secure-testroute"
+contains = ["hello"]
+
+[[check]]
+name = "a draft is accepted"
+post = "http://127.0.0.1:3000/api/posts"
+body = '{"slug":"un-brouillon","title":"Pas fini","body":"# Wip","published":false}'
+expect = 201
+
+[[check]]
+name = "rebuilding after a draft is accepted"
+post = "http://127.0.0.1:3000/secure-testroute/rebuild"
+expect = 200
+
+# The one that matters: an unpublished post readable at its URL is a leak.
+[[check]]
+name = "a draft is not readable"
+get = "http://127.0.0.1:3000/posts/un-brouillon"
+expect = 404
+
+[[check]]
+name = "a draft is not in the feed either"
+get = "http://127.0.0.1:3000/rss.xml"
+contains = ["Premier post"]
+
+[[check]]
+name = "the editor shows the draft so it can be finished"
+get = "http://127.0.0.1:3000/secure-testroute"
+contains = ["un-brouillon", "Pas fini"]
+
+# ── Lithair's own dashboard, behind the same prefix ────────────────────────
+# The point of building on Lithair is not to reimplement what it ships. Its
+# admin panel and data admin UI are mounted under the operator's prefix rather
+# than their default paths, so they inherit the same "nothing to find" property
+# as the editor.
+
+[[check]]
+name = "the framework dashboard opens with a session"
+get = "http://127.0.0.1:3000/secure-testroute/panel"
+expect = 200
+
+[[check]]
+name = "the data admin opens with a session"
+get = "http://127.0.0.1:3000/secure-testroute/data"
+expect = 200
+
+# ── the site keeps itself current, with nobody calling rebuild ─────────────
+# RED on purpose. Everything above reaches the site because something POSTed to
+# <prefix>/rebuild right after writing. A headless client has no reason to know
+# that endpoint exists, and forgetting it means a post that is stored and
+# invisible. lithair 1.8's on_mutation hook (issue #70) closes that: the write
+# path itself signals a rebuild.
+#
+# The editor still calls rebuild explicitly and should keep doing so — it gives
+# a person a deterministic "it is live now" instead of a race with a background
+# task. This is about the writes that do NOT come from the editor.
+
+[[check]]
+name = "a post written with no rebuild call is accepted"
+post = "http://127.0.0.1:3000/api/posts"
+body = '{"slug":"sans-rebuild","title":"Publié sans rebuild","body":"# Seul","published":true}'
+expect = 201
+
+# The hook runs on a background task, so the site is current in a moment rather
+# than instantly. A second is generous for a blog with three posts.
+[[check]]
+name = "give the mutation hook a moment"
+run = "sleep 1"
+
+[[check]]
+name = "and it reached the site anyway"
+get = "http://127.0.0.1:3000/posts/sans-rebuild"
+contains = ["Publié sans rebuild"]
+
+# ── and the session is what was doing the work ─────────────────────────────
+
+[[check]]
+name = "logging out ends the session"
+post = "http://127.0.0.1:3000/secure-testroute/logout"
+expect = 200
+
+[[check]]
+name = "publishing after logout is refused again"
+post = "http://127.0.0.1:3000/api/posts"
+body = '{"slug":"after-logout","title":"Nope","body":"x","published":true}'
+expect = 401
+
+# ── what protects the login, and why it is not asserted here ───────────────
+# Measured, not assumed: 40 wrong-password attempts against a debug build took
+# 13.4s — about 336ms each. The throttle is Argon2, not the firewall, and the
+# rate limiter on /auth/ never trips because the hash never lets the request
+# rate climb high enough to reach it. It stays configured as a second line for
+# any future path that answers more cheaply.
+#
+# The assertion worth having — "a wrong password must NOT come back fast",
+# which is what would catch someone swapping the hash for a string compare —
+# needs the mirror of max_ms. Filed as probatum-org/probatum#8. `run` is not a
+# workaround: the probatum image ships no curl, no seq, and a BusyBox `date`
+# without %N, so elapsed-time arithmetic in a shell check is not available
+# either.

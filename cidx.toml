@@ -7,12 +7,19 @@
 [security]
 containers = ["trivy", "gitleaks", "cargo-audit"]
 
-# The stock cargo-audit preset extracts its release tarball into
-# /usr/local/bin, but cidx runs containers as a non-root user, so every member
-# fails with "tar: <file>: Cannot open: Permission denied" and the phase dies
-# with exit 2. Same command, unpacked somewhere writable instead.
-[containers.cargo-audit]
-command = "sh -c 'curl -sSfL https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-$(uname -m)-unknown-linux-gnu-v0.22.2.tgz | tar xz --strip-components=1 -C /tmp && /tmp/cargo-audit audit'"
+# The stock trivy preset is `fs /work`, which scans build output too. Two
+# directories there produce pure noise:
+#   - .cargo/ — the musl build redirects CARGO_HOME into the workspace (the
+#     image's /opt/cargo is root-owned), so ~300 MB of crate sources land here.
+#     Many crates ship their own Cargo.lock, and trivy reads those as if they
+#     were ours: it reported aws-lc-sys 0.31.0 as vulnerable while this project
+#     actually resolves 0.43.0, well past the fix.
+#   - target/ — `cargo package` freezes historical Cargo.locks under
+#     target/package/.
+# The real lockfile at the repo root stays scanned, and cargo-audit is the hard
+# gate on Rust dependencies either way.
+[containers.trivy]
+command = "fs --skip-dirs .cargo --skip-dirs target --skip-dirs node_modules /work"
 
 # prettier dropped: `cidx init` auto-added it, but this repo is Rust-only and
 # its sole target is the hand-wrapped Markdown (79 cols, matching CLAUDE.md).
@@ -30,12 +37,19 @@ containers = ["clippy", "rustfmt", "commitizen"]
 # it. Containers within a phase run in order, so the build lands the artifact
 # before probatum looks for it.
 #
-# The build is cargo-build-musl, same as the build phase: stela ships a static
-# musl binary, so that is the artifact worth smoke-testing. See
-# .cidx/presets.toml for why static, and cidx-org/cidx#195 for the constraint
-# that probatum's Alpine image cannot execute a glibc binary anyway.
+# It is cargo-build-musl, same as the build phase: stela ships a static musl
+# binary, so that is the artifact worth smoke-testing — and probatum's image is
+# Alpine, which could not execute a glibc one anyway.
 [test]
-containers = ["cargo-build-musl", "cargo-test", "probatum"]
+containers = ["cargo-build-musl", "cargo-test", "probatum", "playwright"]
+
+# cidx pins preset images by digest, which is right, but it means each probatum
+# release needs a bump commit upstream. probatum.toml relies on the cookie jar
+# that shipped in 0.9.0 (probatum-org/probatum#5) and cidx's preset is still on
+# 0.8.0, so the image moves here. The probatum repo overrides its own preset the
+# same way. Drop this when cidx bumps.
+[containers.probatum]
+image = "ghcr.io/probatum-org/probatum:0.9.0"
 
 # Static musl, not the stock cargo-build: the shipping artifact must run on any
 # Linux without a matching glibc. See .cidx/presets.toml.

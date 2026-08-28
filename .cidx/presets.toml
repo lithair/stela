@@ -41,3 +41,27 @@ phase = "build"
 workdir = "/work"
 volumes = ["${WORKSPACE}:/work"]
 description = "Static musl release build — stela's shipping artifact"
+
+# Browser tests. A third checker, and the division of labour has to stay sharp
+# or the same behaviour gets asserted in three places: cidx owns code quality,
+# probatum owns HTTP behaviour, this owns only what needs a browser — the
+# editor's JavaScript and the human path through the login form.
+#
+# It earned its place immediately: the first run found that Tera's HTML escaping
+# had been turning "/" into "&#x2F;" inside the login page's script since the
+# page was written, so no human could sign in. Forty-four probatum checks never
+# saw it, because none of them execute a page.
+#
+# Node is a test dependency and never a runtime one — what ships is a static
+# binary in an image with no shell.
+[presets.playwright]
+name = "playwright"
+image = "mcr.microsoft.com/playwright:v1.56.0-noble"
+# The pinned @playwright/test must match the image, or the browsers it drives
+# are the wrong build. npm needs a writable HOME; the container is not root.
+command = "sh -c 'HOME=/tmp npm install --silent --no-audit --no-fund && HOME=/tmp npx playwright test'"
+phase = "test"
+workdir = "/work"
+volumes = ["${WORKSPACE}:/work"]
+ephemeral = true
+description = "Browser-level end-to-end tests (Playwright), for the surface probatum cannot reach"
