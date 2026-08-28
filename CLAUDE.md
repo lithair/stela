@@ -269,10 +269,27 @@ MVP on the later ones:
    deploy from one YAML — adopt last; "one sync to your VPS" is the closing
    act of the demo, not the opening)
 
-**Division of labour — keep it, it prevents duplicate checks:**
-cidx owns code quality (clippy, rustfmt, audit, secrets, commit format).
-probatum owns behaviour (does the binary DO what it claims). A check belongs
-in exactly one of them.
+**Division of labour — keep it sharp, it prevents duplicate checks:**
+- **cidx** owns code quality: clippy, rustfmt, audit, secrets, commit format.
+- **probatum** owns HTTP behaviour: does the binary DO what it claims.
+- **Playwright** (`e2e/`) owns **only what needs a browser** — the editor's
+  JavaScript and the human path through the login form. It must never
+  re-assert a status probatum already covers: browser tests are slow and
+  flaky, so they go only where nothing else can reach.
+
+A check belongs in exactly one of the three. Node is a **test** dependency and
+never a runtime one; what ships is a static binary in an image with no shell.
+
+**The browser tier paid for itself on its first run.** Tera auto-escapes `/` as
+`&#x2F;` in `.html` templates, and inside a `<script>` the HTML parser does not
+decode entities — so the login page's `fetch("{{ admin_route }}/login")` had
+been posting to `/secure-xxx/&` since the page was written. **No human could
+sign in, and 44 probatum checks never saw it**, because none of them execute a
+page. The fix is `| safe` on those interpolations, earned by `route_is_safe`
+validating the admin route against the same alphabet as a slug.
+This is the second time the same escaping trap has bitten — the first was the
+RSS feed's URLs. Interpolating a URL into a template here needs `| safe` plus a
+validated value; assume nothing else is right.
 
 Every friction found in any of the four is an upstream issue to file/fix —
 that's half the point. Workflow: draft the issue in chat, get it approved,

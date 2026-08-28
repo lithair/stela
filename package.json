@@ -1,0 +1,8 @@
+{
+  "name": "stela-e2e",
+  "private": true,
+  "description": "Browser tests only. Node is a test dependency here and never a runtime one — the shipped artifact is a single static binary in an image with no shell.",
+  "devDependencies": {
+    "@playwright/test": "1.56.0"
+  }
+}

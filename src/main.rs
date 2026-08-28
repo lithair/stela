@@ -216,8 +216,12 @@ async fn serve(
                  admin path is one every scanner already knows."
             )
         })?;
-    if !admin_route.starts_with('/') {
-        anyhow::bail!("--admin-route must start with '/' (got {admin_route:?})");
+    if !route_is_safe(&admin_route) {
+        anyhow::bail!(
+            "--admin-route must be '/' followed by lowercase letters, digits, '-' or '_' \
+             (got {admin_route:?}). It is interpolated into the admin page's JavaScript, \
+             so anything else could break out of a string literal."
+        );
     }
     let admin_user = admin_user
         .or_else(|| config.as_ref().map(|c| c.admin_user.clone()))
@@ -662,6 +666,18 @@ async fn load_posts(posts_dir: &str) -> Result<Vec<Post>> {
     )
 }
 
+/// The admin route has to be safe as a URL path and inside a JavaScript string.
+///
+/// The admin pages interpolate it into a `<script>` block, where the HTML parser
+/// does not decode entities — so it is marked `safe` in the template and this is
+/// what earns that. Same alphabet as a slug, with the leading slash.
+fn route_is_safe(route: &str) -> bool {
+    match route.strip_prefix('/') {
+        Some(rest) => slug_is_safe(rest),
+        None => false,
+    }
+}
+
 /// A slug has to be safe as a URL path segment and as an asset key.
 ///
 /// Deliberately strict rather than clever: lowercase ASCII, digits, `-` and `_`.
@@ -799,6 +815,19 @@ mod tests {
             "the script block can be closed: {json}"
         );
         assert!(json.contains("<\\/script"));
+    }
+
+    #[test]
+    fn an_admin_route_cannot_break_out_of_a_script_string() {
+        assert!(route_is_safe("/secure-a7f3k29"));
+        assert!(route_is_safe("/admin_panel"));
+
+        assert!(!route_is_safe("secure-x"), "must be absolute");
+        assert!(!route_is_safe("/"), "empty is not a route");
+        // Each of these would end the JS string literal or the script block.
+        assert!(!route_is_safe("/x\"; alert(1); \""));
+        assert!(!route_is_safe("/x</script>"));
+        assert!(!route_is_safe("/x'"));
     }
 
     #[test]

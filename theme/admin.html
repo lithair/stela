@@ -101,7 +101,7 @@
 
           // Writing stores the post; rendering it is a separate step. Both have
           // to succeed or the site shows something other than what was saved.
-          const build = await fetch("{{ admin_route }}/rebuild", { method: "POST" });
+          const build = await fetch("{{ admin_route | safe }}/rebuild", { method: "POST" });
           if (!build.ok) throw new Error("saved, but the rebuild failed (" + build.status + ")");
 
           location.reload();
@@ -112,7 +112,7 @@
 
       document.getElementById("logout").addEventListener("click", async (e) => {
         e.preventDefault();
-        await fetch("{{ admin_route }}/logout", { method: "POST" });
+        await fetch("{{ admin_route | safe }}/logout", { method: "POST" });
         location.href = "/";
       });
     </script>

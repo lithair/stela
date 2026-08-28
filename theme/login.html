@@ -39,7 +39,7 @@
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
         status.textContent = "Signing in…";
-        const res = await fetch("{{ admin_route }}/login", {
+        const res = await fetch("{{ admin_route | safe }}/login", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -48,7 +48,7 @@
           }),
         });
         if (res.ok) {
-          location.href = "{{ admin_route }}";
+          location.href = "{{ admin_route | safe }}";
           return;
         }
         // Deliberately vague, and deliberately not slower or faster for a wrong

@@ -19,7 +19,7 @@ containers = ["trivy", "gitleaks", "cargo-audit"]
 # The real lockfile at the repo root stays scanned, and cargo-audit is the hard
 # gate on Rust dependencies either way.
 [containers.trivy]
-command = "fs --skip-dirs .cargo --skip-dirs target /work"
+command = "fs --skip-dirs .cargo --skip-dirs target --skip-dirs node_modules /work"
 
 # prettier dropped: `cidx init` auto-added it, but this repo is Rust-only and
 # its sole target is the hand-wrapped Markdown (79 cols, matching CLAUDE.md).
@@ -41,7 +41,7 @@ containers = ["clippy", "rustfmt", "commitizen"]
 # binary, so that is the artifact worth smoke-testing — and probatum's image is
 # Alpine, which could not execute a glibc one anyway.
 [test]
-containers = ["cargo-build-musl", "cargo-test", "probatum"]
+containers = ["cargo-build-musl", "cargo-test", "probatum", "playwright"]
 
 # cidx pins preset images by digest, which is right, but it means each probatum
 # release needs a bump commit upstream. probatum.toml relies on the cookie jar
