@@ -30,7 +30,7 @@ jobs:
       - name: Install CIDX
         run: |
           mkdir -p bin
-          go install github.com/cidx-org/cidx/v3/cmd/cidx@v3.2.0
+          go install github.com/cidx-org/cidx/v3/cmd/cidx@v3.3.0
           cp "$(go env GOPATH)/bin/cidx" bin/cidx
       - uses: actions/upload-artifact@v7
         with:

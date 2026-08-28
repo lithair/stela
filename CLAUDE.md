@@ -41,6 +41,11 @@ publish.
   racing a background task, and a theme edit needs a rebuild with no write to
   trigger it. The hook is what makes a headless client work — it has no reason
   to know the rebuild endpoint exists.
+  **Rebuilds are serialised behind a mutex.** The route and the hook can both
+  want one at the same instant — saving in the editor triggers both — and two
+  concurrent rebuilds each open the event store, which fails with
+  `Failed to acquire entry lock`. This only appeared in CI: the race needs the
+  timing a loaded runner gives it, and passed locally every time.
   Coalescing is the caller's job, as expected: a capacity-1 channel and
   `try_send`, so a bulk import queues one rebuild rather than one per post.
   Dropping a signal is safe precisely because `rebuild()` replays the whole

@@ -286,12 +286,20 @@ async fn serve(
     // signal is correct rather than lossy — rebuild() replays the whole store,
     // so the pending one will render whatever the newer write left behind. That
     // is what keeps a bulk import from queueing one full rebuild per post.
+    // Rebuilds are serialised. The explicit route and the mutation hook can both
+    // want one at the same moment — an editor saving a post triggers both — and
+    // two rebuilds at once each open the event store, which fails with
+    // "Failed to acquire entry lock". Found in CI, not locally: the race needs
+    // the timing a loaded runner gives it.
+    let rebuild_lock = Arc::new(tokio::sync::Mutex::new(()));
     let (dirty_tx, mut dirty_rx) = tokio::sync::mpsc::channel::<()>(1);
     let hook_engine = engine.clone();
     let hook_dir = posts_dir.clone();
     let hook_site = site.clone();
+    let hook_lock = rebuild_lock.clone();
     tokio::spawn(async move {
         while dirty_rx.recv().await.is_some() {
+            let _guard = hook_lock.lock().await;
             if let Err(e) = rebuild(&hook_engine, &hook_dir, &hook_site).await {
                 log::error!("a rebuild triggered by a write failed: {e}");
             }
@@ -301,6 +309,7 @@ async fn serve(
     let rebuild_engine = engine.clone();
     let rebuild_dir = posts_dir.clone();
     let rebuild_site = site.clone();
+    let route_lock = rebuild_lock.clone();
     let frontend_server = Arc::new(FrontendServer::new_scc2(engine.clone()));
     let login_site = site.clone();
     let login_route = admin_route.clone();
@@ -412,7 +421,11 @@ async fn serve(
                 let engine = rebuild_engine.clone();
                 let dir = rebuild_dir.clone();
                 let site = rebuild_site.clone();
+                let lock = route_lock.clone();
                 Box::pin(async move {
+                    // Waits rather than races: a caller asked for a rebuild and
+                    // gets one, after whichever is in flight has finished.
+                    let _guard = lock.lock().await;
                     match rebuild(&engine, &dir, &site).await {
                         Ok(n) => Ok(json(StatusCode::OK, &format!(r#"{{"rendered":{n}}}"#))),
                         Err(e) => {
