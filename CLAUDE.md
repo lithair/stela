@@ -68,6 +68,14 @@ publish.
   "Tera syntax, porting a Zola theme is reasonable work" — do NOT promise
   "Zola-theme compatible" (its built-ins `get_section`, shortcodes, taxonomies
   would each need reimplementing; add the top 2-3 only when a real port asks).
+- **A post's markdown is rendered with raw HTML escaped, not passed through.**
+  pulldown-cmark emits `Event::Html` and `Event::InlineHtml` untouched, so a
+  body containing `<script>` would run in the browser of every reader of the
+  public site — stored XSS reachable by whoever can publish. Those events become
+  text. It removes an ability nobody asked for, and it is what keeps the
+  "multi-author, not yet" line in the non-goals from turning into a hole the day
+  it lands. Raw HTML in posts, if it is ever really wanted, needs an explicit
+  per-post opt-in and a sanitiser — never a silent pass-through.
 - **Content models: `Post`, `Page`, `SiteSettings`** via
   `#[derive(DeclarativeModel)]`. Public read / RBAC write is the canonical
   Lithair pattern (see lithair's rbac-session example). `SiteSettings` feeds
@@ -165,7 +173,8 @@ file), markdown via `pulldown-cmark`.
 
 **Shipped so far:** `Post` (slug as primary key, since the slug IS the URL),
 `stela serve`, the default theme compiled into the binary, markdown via
-`pulldown-cmark`, `/`, `/posts/:slug`, `/rss.xml`, `POST /admin/rebuild`, and
+`pulldown-cmark`, `/`, `/posts/:slug`, `/rss.xml`, `POST /api/posts`,
+`POST <prefix>/rebuild`, and
 session auth — `/auth/login`, `/auth/logout`, every write gated, the admin panel
 at the operator's own route.
 
@@ -300,9 +309,12 @@ Every friction found in any of the four is an upstream issue to file/fix —
 that's half the point. Workflow: draft the issue in chat, get it approved,
 then post with `gh issue create`.
 
-**Upstream issues filed from this project — seven, six already closed.**
-Every workaround they justified has been deleted; that is the point of tracking
-them here rather than letting them calcify into "how stela does things".
+**Upstream issues filed from this project — eleven, ten already closed**, plus
+four PRs written from here (lithair#206, #212, #216, #219). Every workaround
+they justified has been deleted, and the three that remain open are limits on
+what a check can *say*, not code this repo carries. That is the point of
+tracking them here rather than letting them calcify into "how stela does
+things".
 
 Closed and shipped, nothing left in this repo:
 - [cidx#190](https://github.com/cidx-org/cidx/issues/190) — `doctor` passed on

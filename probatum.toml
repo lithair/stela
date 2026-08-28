@@ -199,6 +199,25 @@ name = "the published post is on the index"
 get = "http://127.0.0.1:3000/"
 contains = ["Premier post"]
 
+# Raw HTML in a body must reach the reader as text, never as markup: the
+# rendered page is public, so a <script> there would run in every reader's
+# browser, and pulldown-cmark passes it through by default.
+[[check]]
+name = "raw html in a post is accepted"
+post = "http://127.0.0.1:3000/api/posts"
+body = '{"slug":"pas-de-script","title":"Inoffensif","body":"<script>alert(1)</script>","published":true}'
+expect = 201
+
+[[check]]
+name = "rebuilding after the raw html post"
+post = "http://127.0.0.1:3000/secure-testroute/rebuild"
+expect = 200
+
+[[check]]
+name = "and the reader gets escaped text, not a script"
+get = "http://127.0.0.1:3000/posts/pas-de-script"
+contains = ["&lt;script&gt;"]
+
 [[check]]
 name = "the post has its own page, markdown rendered"
 get = "http://127.0.0.1:3000/posts/hello"

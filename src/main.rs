@@ -711,8 +711,28 @@ fn theme() -> Result<tera::Tera> {
     Ok(tera)
 }
 
+/// Render a post's markdown, with raw HTML shown rather than executed.
+///
+/// pulldown-cmark passes `Event::Html` and `Event::InlineHtml` through
+/// untouched — that is its documented behaviour, and it means a body containing
+/// `<script>` would run in the browser of every reader of the public site, not
+/// just its author. Stored XSS, reachable by whoever can publish.
+///
+/// Those events become text instead, which the renderer escapes. It costs
+/// authors an ability none has asked for, and it is the boring default: today
+/// the only author owns the server, but multi-author is a "not yet" in
+/// CLAUDE.md rather than a "never", and this would be invisible when it lands.
+/// If embedding raw HTML ever becomes a real request, it wants an explicit
+/// opt-in per post and a sanitiser, not a silent pass-through.
 fn markdown_to_html(markdown: &str) -> String {
-    let parser = pulldown_cmark::Parser::new(markdown);
+    use pulldown_cmark::Event;
+
+    let parser = pulldown_cmark::Parser::new(markdown).map(|event| match event {
+        Event::Html(raw) => Event::Text(raw),
+        Event::InlineHtml(raw) => Event::Text(raw),
+        other => other,
+    });
+
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, parser);
     html
@@ -810,6 +830,24 @@ mod tests {
         assert!(!slug_is_safe(""));
         assert!(!slug_is_safe("Hello"));
         assert!(!slug_is_safe(&"x".repeat(201)));
+    }
+
+    #[test]
+    fn raw_html_in_a_post_is_shown_not_executed() {
+        // The rendered page is public, so this is what every reader would run.
+        let html = markdown_to_html("<script>alert(1)</script>");
+        assert!(!html.contains("<script>"), "script survived: {html}");
+        assert!(
+            html.contains("&lt;script&gt;"),
+            "not escaped either: {html}"
+        );
+
+        let img = markdown_to_html("<img src=x onerror=alert(1)>");
+        assert!(!img.contains("<img"), "inline html survived: {img}");
+
+        // Markdown itself still renders — the filter is narrow.
+        assert!(markdown_to_html("# Title").contains("<h1>"));
+        assert!(markdown_to_html("**bold**").contains("<strong>"));
     }
 
     #[test]
