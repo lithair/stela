@@ -1,0 +1,26 @@
+# One binary, one config, one data directory. That is the whole deployment.
+#
+#   docker compose run --rm stela new /blog   # once: writes blog/stela.toml,
+#                                             # prints the route and password
+#   docker compose up -d
+#
+# Write down what `new` prints. It is the only time the password exists.
+
+services:
+  stela:
+    image: stela:dev
+    # Numeric on purpose: the image is `scratch`, so there is no /etc/passwd to
+    # resolve a name against. Match it to whoever owns ./blog on the host, or
+    # the container cannot write its own data.
+    user: "${STELA_UID:-1000}:${STELA_GID:-1000}"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      # A bind mount rather than a named volume: the config and the event store
+      # are things an operator wants to back up, read and copy. Hiding them
+      # inside Docker's volume directory makes that harder for no gain.
+      - ./blog:/blog
+    # The half of "does it survive" that a container can actually prove. The
+    # other half — surviving a host reboot — needs the host's init, which is
+    # what the VM tier is for.
+    restart: unless-stopped

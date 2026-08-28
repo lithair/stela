@@ -54,6 +54,19 @@ name = "the password it printed is nowhere in the config"
 # written. This regenerates one, captures the password, and greps for it.
 run = "./target/x86_64-unknown-linux-musl/release/stela new /tmp/blog-c > /tmp/new-c.txt && P=$(grep -i 'password:' /tmp/new-c.txt | tr -s ' ' | cut -d' ' -f2) && test -n \"$P\" && ! grep -qF \"$P\" /tmp/blog-c/stela.toml"
 
+# The rule is about an existing BLOG, not an existing directory: a bind-mounted
+# volume always exists before the container runs, so refusing on existence alone
+# would make `docker compose run stela new /blog` impossible — the normal way to
+# install this. Found by running it, not by reading it.
+[[check]]
+name = "scaffolding into an empty directory is fine"
+run = "mkdir -p /tmp/blog-empty && ./target/x86_64-unknown-linux-musl/release/stela new /tmp/blog-empty"
+contains = ["/secure-"]
+
+[[check]]
+name = "but never over an existing blog"
+run = "./target/x86_64-unknown-linux-musl/release/stela new /tmp/blog-a; test $? -ne 0"
+
 [[check]]
 name = "the generated blog starts with no flags at all"
 run = "cd /tmp/blog-a && /work/target/x86_64-unknown-linux-musl/release/stela serve --port 3002"

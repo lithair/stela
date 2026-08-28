@@ -90,7 +90,8 @@ const CONFIG_FILE: &str = "stela.toml";
 enum Command {
     /// Create a new blog: a config, a random admin route, and a password.
     New {
-        /// Directory to create. Must not already exist.
+        /// Directory for the new blog. May exist as long as it is empty and
+        /// holds no stela.toml — a bind-mounted volume always exists.
         path: PathBuf,
 
         #[arg(long, default_value = "editor")]
@@ -534,11 +535,28 @@ fn load_config() -> Result<Option<Config>> {
 /// that matter are generated unguessable, and the secret one is never written
 /// down by the machine.
 fn scaffold(path: &std::path::Path, admin_user: &str, title: &str) -> Result<()> {
-    if path.exists() {
+    // What must not be clobbered is an existing blog, not an existing
+    // directory. The distinction is not pedantry: a bind-mounted volume always
+    // exists before the container runs, so refusing on existence alone makes
+    // `docker compose run stela new /blog` impossible — which is the normal way
+    // to install this.
+    if path.join(CONFIG_FILE).exists() {
         anyhow::bail!(
-            "{} already exists. Refusing to write into it — generating a config over \
-             an existing blog would replace its admin route and password, locking the \
-             owner out of their own site.",
+            "{} already holds a {CONFIG_FILE}. Refusing to overwrite it — a fresh config \
+             would replace this blog's admin route and password, locking its owner out \
+             of their own site.",
+            path.display()
+        );
+    }
+    if path.is_dir()
+        && path
+            .read_dir()
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false)
+    {
+        anyhow::bail!(
+            "{} is not empty. Refusing to scaffold into it — pick an empty directory so \
+             it is obvious what this blog owns.",
             path.display()
         );
     }

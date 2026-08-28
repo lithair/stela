@@ -120,6 +120,37 @@ publish.
   throughput ever disappoints, reach for jemalloc or mimalloc as the global
   allocator before abandoning static linking.
 
+## Shipping as a container
+
+`Dockerfile` builds in `clux/muslrust` and ships `FROM scratch` — the image
+contains the stripped binary and nothing else. 25 MB, no base distribution, no
+package manager, **no shell**. That is a security property before a size one:
+there is no shell to obtain and no distribution CVEs to track, because there is
+no distribution. It is the dividend of the static-musl decision.
+
+The cost, so it stays a choice: `docker exec` gives you nothing to run. Debug
+against the binary on a host, or temporarily swap the final stage for `alpine`.
+
+`docker-compose.yml` is the whole install:
+
+```bash
+docker compose run --rm stela new /blog   # once; prints route + password
+docker compose up -d
+```
+
+Three things that only showed up by running it:
+- **`CMD` passes `--host 0.0.0.0`.** The binary defaults to loopback, which is
+  right on a host and unreachable in a container.
+- **`user:` is numeric** (`${STELA_UID:-1000}`). `scratch` has no `/etc/passwd`
+  to resolve a name against, and it has to match whoever owns `./blog` or the
+  container cannot write its own data.
+- **`stela new` refuses an existing *blog*, not an existing directory.** A bind
+  mount always exists before the container runs, so the stricter rule made
+  `docker compose run stela new /blog` impossible.
+
+A bind mount rather than a named volume: the config and the event store are
+things an operator backs up and reads.
+
 ## MVP scope (and non-goals)
 
 MVP: `Post` (slug, title, markdown body, published flag), `Page`,
