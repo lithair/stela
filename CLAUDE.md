@@ -185,7 +185,10 @@ MVP: `Post` (slug, title, markdown body, published flag), `Page`,
 editor as a tab), one default theme (index, article, page, RSS + one CSS
 file), markdown via `pulldown-cmark`.
 
-**Shipped so far:** `Post` (slug as primary key, since the slug IS the URL),
+**Shipped so far:** `Post` and `Page` (slug as primary key, since the slug IS
+the URL — a page renders at `/{slug}`, a post under `/posts/`; pages stay out
+of the feed, which announces new writing, and `slug_is_safe` refusing dots is
+what stops a page from shadowing `/rss.xml` or `/index.html`), `SiteSettings`,
 `stela serve`, the default theme compiled into the binary, markdown via
 `pulldown-cmark`, `/`, `/posts/:slug`, `/rss.xml`, `POST /api/posts`,
 `POST <prefix>/rebuild`, and
