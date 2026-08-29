@@ -115,8 +115,22 @@ publish.
   A second panel means a second route, a second auth surface and a second
   thing to keep in sync, to buy a separation nobody has asked for yet. Split
   only when a real need shows up.
-- **Headless stays free:** the REST content API comes with DeclarativeModel;
-  an Astro/other front consuming it is an advanced path, never the default.
+- **Headless is currently WRITE-ONLY, and the pitch overstates it.** The REST
+  API comes with DeclarativeModel, but Stela's catch-all `GET /*` serves the
+  asset store and matches before the model routes, so `GET /api/posts` returns
+  the theme's 404 rather than JSON. Writes (POST/PUT/DELETE) reach the model
+  handler and work. Two things have to be decided together before the README's
+  "point Astro at it" is true: excluding `/api/` from the catch-all, and whether
+  those reads are public — `with_models_require_session(true)` gates GET too, so
+  today a headless reader would need a session, which is right for drafts and
+  wrong for published posts. Do not half-fix this.
+- **`SiteSettings` is a single row keyed on `"site"`.** `stela.toml` keeps
+  identity and access — admin route, user, password hash, the things that must
+  exist before anyone can log in — and `SiteSettings` carries presentation,
+  which the person who logged in can change. Editing it triggers a rebuild
+  through the same `on_mutation` hook a post does, because renaming the blog
+  changes every page. The config's values seed the fallback, so a blog with no
+  stored settings still renders under the name it booted with.
 - **Storage:** Lithair event store on disk (`data/`), memory-first serving.
   No external DB, ever — that's the product's reason to exist.
 - **The shipping artifact is a statically linked musl binary.** "One binary,
