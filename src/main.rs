@@ -32,9 +32,10 @@ const CSS: &str = "text/css; charset=utf-8";
 /// this one ships inside the binary so `stela serve` needs nothing beside it —
 /// that is what "copy one file to your server" requires. Loading a theme from
 /// disk to override these comes with the admin, not before.
-const THEME: [(&str, &str); 6] = [
+const THEME: [(&str, &str); 7] = [
     ("index.html", include_str!("../theme/index.html")),
     ("post.html", include_str!("../theme/post.html")),
+    ("page.html", include_str!("../theme/page.html")),
     ("404.html", include_str!("../theme/404.html")),
     ("admin.html", include_str!("../theme/admin.html")),
     ("login.html", include_str!("../theme/login.html")),
@@ -147,6 +148,28 @@ const SESSION_HOURS: u64 = 12;
 /// Generous for a human — nobody types a password ten times a second — and
 /// ruinous for a script working through a wordlist.
 const LOGIN_QPS: u64 = 10;
+
+/// A page: what a blog pins outside the stream — about, contact, colophon.
+///
+/// Same shape as a post on purpose; what differs is the address (`/{slug}`
+/// rather than `/posts/{slug}`) and the feed, which announces new writing and
+/// where a pinned page is not news.
+#[derive(Debug, Clone, Serialize, Deserialize, DeclarativeModel)]
+struct Page {
+    #[http(expose)]
+    #[db(primary_key)]
+    slug: String,
+
+    #[http(expose)]
+    title: String,
+
+    /// Markdown source, rendered to HTML at publish time.
+    #[http(expose)]
+    body: String,
+
+    #[http(expose)]
+    published: bool,
+}
 
 /// The blog's own name and address, as a model so the admin can change them.
 ///
@@ -292,6 +315,7 @@ async fn serve(
     };
     let posts_dir = data.join("posts").to_string_lossy().to_string();
     let settings_dir = data.join("settings").to_string_lossy().to_string();
+    let pages_dir = data.join("pages").to_string_lossy().to_string();
 
     let engine = Arc::new(FrontendEngine::new("stela", data.join("frontend")).await?);
 
@@ -302,7 +326,7 @@ async fn serve(
 
     // Render before serving: `/` has to answer 200 from the first request, even
     // with no posts, or a readiness probe never passes.
-    rebuild(&engine, &posts_dir, &settings_dir, &site).await?;
+    rebuild(&engine, &posts_dir, &pages_dir, &settings_dir, &site).await?;
 
     log::info!("stela serving on http://{host}:{port}");
     log::info!("admin panel: http://{host}:{port}{admin_route} (user: {admin_user})");
@@ -326,13 +350,22 @@ async fn serve(
     let (dirty_tx, mut dirty_rx) = tokio::sync::mpsc::channel::<()>(1);
     let hook_engine = engine.clone();
     let hook_dir = posts_dir.clone();
+    let hook_pages = pages_dir.clone();
     let hook_settings = settings_dir.clone();
     let hook_site = site.clone();
     let hook_lock = rebuild_lock.clone();
     tokio::spawn(async move {
         while dirty_rx.recv().await.is_some() {
             let _guard = hook_lock.lock().await;
-            if let Err(e) = rebuild(&hook_engine, &hook_dir, &hook_settings, &hook_site).await {
+            if let Err(e) = rebuild(
+                &hook_engine,
+                &hook_dir,
+                &hook_pages,
+                &hook_settings,
+                &hook_site,
+            )
+            .await
+            {
                 log::error!("a rebuild triggered by a write failed: {e}");
             }
         }
@@ -340,6 +373,7 @@ async fn serve(
 
     let rebuild_engine = engine.clone();
     let rebuild_dir = posts_dir.clone();
+    let rebuild_pages = pages_dir.clone();
     let rebuild_settings = settings_dir.clone();
     let rebuild_site = site.clone();
     let route_lock = rebuild_lock.clone();
@@ -436,6 +470,7 @@ async fn serve(
         })
         .with_model::<Post>(posts_dir.clone(), "/api/posts")
         .with_model::<SiteSettings>(settings_dir.clone(), "/api/settings")
+        .with_model::<Page>(pages_dir.clone(), "/api/pages")
         // lithair 1.8 (issue #70). Without it a post written through the REST
         // API is stored and invisible until somebody remembers to call rebuild
         // — which a headless client has no reason to know about. The hook runs
@@ -445,6 +480,13 @@ async fn serve(
         // The hook must stay short and is not async, so it only signals; the
         // worker above does the work.
         .on_mutation(Post::http_base_path(), {
+            let tx = dirty_tx.clone();
+            move |event| {
+                log::info!("{} on {}, rebuilding", event.operation, event.model_name);
+                let _ = tx.try_send(());
+            }
+        })
+        .on_mutation(Page::http_base_path(), {
             let tx = dirty_tx.clone();
             move |event| {
                 log::info!("{} on {}, rebuilding", event.operation, event.model_name);
@@ -463,6 +505,7 @@ async fn serve(
             move |_req| {
                 let engine = rebuild_engine.clone();
                 let dir = rebuild_dir.clone();
+                let pages = rebuild_pages.clone();
                 let settings = rebuild_settings.clone();
                 let site = rebuild_site.clone();
                 let lock = route_lock.clone();
@@ -470,7 +513,7 @@ async fn serve(
                     // Waits rather than races: a caller asked for a rebuild and
                     // gets one, after whichever is in flight has finished.
                     let _guard = lock.lock().await;
-                    match rebuild(&engine, &dir, &settings, &site).await {
+                    match rebuild(&engine, &dir, &pages, &settings, &site).await {
                         Ok(n) => Ok(json(StatusCode::OK, &format!(r#"{{"rendered":{n}}}"#))),
                         Err(e) => {
                             log::error!("rebuild failed: {e}");
@@ -512,10 +555,12 @@ async fn serve(
 async fn rebuild(
     engine: &FrontendEngine,
     posts_dir: &str,
+    pages_dir: &str,
     settings_dir: &str,
     fallback: &Site,
 ) -> Result<usize> {
     let stored = load_posts(posts_dir).await?;
+    let pages = load_pages(pages_dir).await?;
     let site = load_site(settings_dir, fallback).await;
     let site = &site;
 
@@ -577,7 +622,27 @@ async fn rebuild(
             .await?;
     }
 
-    log::info!("rebuilt {} published post(s)", posts.len());
+    for page in pages.iter().filter(|p| p.published) {
+        let mut ctx_page = ctx.clone();
+        ctx_page.insert(
+            "page",
+            &serde_json::json!({
+                "slug": page.slug,
+                "title": page.title,
+                "body_html": markdown_to_html(&page.body),
+            }),
+        );
+        let html = tera.render("page.html", &ctx_page)?;
+        engine
+            .update_asset_with_mime(&format!("/{}", page.slug), html.into_bytes(), HTML)
+            .await?;
+    }
+
+    log::info!(
+        "rebuilt {} published post(s), {} page(s)",
+        posts.len(),
+        pages.iter().filter(|p| p.published).count()
+    );
     Ok(posts.len())
 }
 
@@ -736,26 +801,51 @@ async fn load_site(settings_dir: &str, fallback: &Site) -> Site {
 /// for a blog; if a site ever grows enough posts for it to show, cache it and
 /// invalidate on rebuild.
 async fn load_posts(posts_dir: &str) -> Result<Vec<Post>> {
-    let handler = DeclarativeModelHandler::<Post>::new(posts_dir.to_string())
-        .await
-        .map_err(|e| anyhow::anyhow!("could not open the post store: {e}"))?;
+    Ok(load_all::<Post>(posts_dir)
+        .await?
+        .into_iter()
+        .filter(|p| slug_passes(&p.slug, "post"))
+        .collect())
+}
 
-    Ok(
-        serde_json::from_value::<Vec<Post>>(handler.get_all_data_json().await)
-            .unwrap_or_default()
-            .into_iter()
-            // The slug arrives straight from the REST API and becomes an asset path.
-            // An unchecked one writes wherever it likes (`../../x`) and lands
-            // unescaped in the feed's URLs. Filtered here, where every caller passes.
-            .filter(|p| {
-                let ok = slug_is_safe(&p.slug);
-                if !ok {
-                    log::warn!("skipping post with unusable slug: {:?}", p.slug);
-                }
-                ok
-            })
-            .collect(),
-    )
+/// Every page in the store, unusable slugs already dropped. The slug guard
+/// matters twice here: a page renders at the ROOT (`/{slug}`), in the same
+/// asset namespace as the site's own files — but `slug_is_safe` refuses dots,
+/// so `rss.xml`, `index.html` and friends cannot be shadowed by a page.
+async fn load_pages(pages_dir: &str) -> Result<Vec<Page>> {
+    Ok(load_all::<Page>(pages_dir)
+        .await?
+        .into_iter()
+        .filter(|p| slug_passes(&p.slug, "page"))
+        .collect())
+}
+
+/// One store, replayed. The handler is throwaway on purpose — see rebuild().
+async fn load_all<T>(dir: &str) -> Result<Vec<T>>
+where
+    T: HttpExposable
+        + lithair_core::lifecycle::LifecycleAware
+        + lithair_core::consensus::ReplicatedModel
+        + lithair_core::lifecycle::RetentionAware
+        + serde::de::DeserializeOwned
+        + 'static,
+{
+    let handler = DeclarativeModelHandler::<T>::new(dir.to_string())
+        .await
+        .map_err(|e| anyhow::anyhow!("could not open the store at {dir}: {e}"))?;
+
+    Ok(serde_json::from_value(handler.get_all_data_json().await).unwrap_or_default())
+}
+
+/// The slug arrives straight from the REST API and becomes an asset path. An
+/// unchecked one writes wherever it likes (`../../x`) and lands unescaped in
+/// the feed's URLs. Filtered here, where every caller passes.
+fn slug_passes(slug: &str, kind: &str) -> bool {
+    let ok = slug_is_safe(slug);
+    if !ok {
+        log::warn!("skipping {kind} with unusable slug: {slug:?}");
+    }
+    ok
 }
 
 /// The admin route has to be safe as a URL path and inside a JavaScript string.
@@ -972,6 +1062,7 @@ mod tests {
                 "admin.html",
                 "index.html",
                 "login.html",
+                "page.html",
                 "post.html",
                 "rss.xml"
             ]

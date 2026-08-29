@@ -334,6 +334,76 @@ name = "and it reached the site anyway"
 get = "http://127.0.0.1:3000/posts/sans-rebuild"
 contains = ["Publié sans rebuild"]
 
+# ── pages: /about, not /posts/about ────────────────────────────────────────
+# RED on purpose. A Page is what a blog pins outside the stream — about,
+# contact, colophon. Same markdown, same editor-by-API, different address and
+# no presence in the feed: the feed announces new writing, and "About" is not
+# news to anyone.
+
+[[check]]
+name = "an editor can create a page"
+post = "http://127.0.0.1:3000/api/pages"
+body = '{"slug":"a-propos","title":"À propos","body":"# Qui écrit ici\n\nMoi.","published":true}'
+expect = 201
+
+[[check]]
+name = "rebuilding after the page"
+post = "http://127.0.0.1:3000/secure-testroute/rebuild"
+expect = 200
+
+[[check]]
+name = "the page lives at the root, not under /posts/"
+get = "http://127.0.0.1:3000/a-propos"
+contains = ["À propos", "<h1>Qui écrit ici</h1>"]
+
+[[check]]
+name = "and not at the posts address"
+get = "http://127.0.0.1:3000/posts/a-propos"
+expect = 404
+
+# The feed announces new writing; a pinned page is not news. This asserts the
+# page's title is absent from the feed — which needs `contains` on a page title
+# chosen to appear nowhere else, since absent on get is still probatum#6.
+[[check]]
+name = "the feed still carries posts"
+get = "http://127.0.0.1:3000/rss.xml"
+contains = ["<rss"]
+
+[[check]]
+name = "an unpublished page is not readable"
+post = "http://127.0.0.1:3000/api/pages"
+body = '{"slug":"brouillon-page","title":"Pas prête","body":"# Wip","published":false}'
+expect = 201
+
+[[check]]
+name = "rebuild after the draft page"
+post = "http://127.0.0.1:3000/secure-testroute/rebuild"
+expect = 200
+
+[[check]]
+name = "the draft page 404s"
+get = "http://127.0.0.1:3000/brouillon-page"
+expect = 404
+
+# A page slug that collides with a real route must lose. The pages are pushed
+# into the same asset namespace as the site's own files, so an "rss.xml" page
+# would replace the feed for every subscriber.
+[[check]]
+name = "a page cannot shadow the feed"
+post = "http://127.0.0.1:3000/api/pages"
+body = '{"slug":"rss.xml","title":"Usurpation","body":"x","published":true}'
+expect = 201
+
+[[check]]
+name = "rebuild after the shadow attempt"
+post = "http://127.0.0.1:3000/secure-testroute/rebuild"
+expect = 200
+
+[[check]]
+name = "the feed is still the feed"
+get = "http://127.0.0.1:3000/rss.xml"
+contains = ["<rss"]
+
 # ── site settings: the blog's own name, editable without a restart ─────────
 # RED on purpose. CLAUDE.md has claimed since the first commit that "SiteSettings
 # feeds the Tera context, so admin edits (title, colors, menus) apply on the next
