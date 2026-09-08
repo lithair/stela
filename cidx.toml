@@ -41,15 +41,16 @@ containers = ["clippy", "rustfmt", "commitizen"]
 # binary, so that is the artifact worth smoke-testing — and probatum's image is
 # Alpine, which could not execute a glibc one anyway.
 [test]
-containers = ["cargo-build-musl", "cargo-test", "probatum", "playwright"]
+containers = ["cargo-build-musl", "cargo-test", "probatum-runner", "probatum", "playwright"]
 
-# cidx pins preset images by digest, which is right, but it means each probatum
-# release needs a bump commit upstream. probatum.toml relies on the cookie jar
-# that shipped in 0.9.0 (probatum-org/probatum#5) and cidx's preset is still on
-# 0.8.0, so the image moves here. The probatum repo overrides its own preset the
-# same way. Drop this when cidx bumps.
+# The lifecycle helper needs Python's standard library. Copy the static
+# probatum runner from its release image first, then execute the entire suite
+# in Python's Alpine image. No root installation, pip, or runtime dependency
+# is added to the Stela image. Both containers share the generated target/ dir.
 [containers.probatum]
-image = "ghcr.io/probatum-org/probatum:0.9.0"
+image = "python:3.13-alpine"
+entrypoint = ["/work/target/probatum-runner/probatum"]
+command = "run"
 
 # Static musl, not the stock cargo-build: the shipping artifact must run on any
 # Linux without a matching glibc. See .cidx/presets.toml.

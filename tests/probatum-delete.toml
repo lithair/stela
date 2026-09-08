@@ -1,0 +1,9 @@
+# Known failing upstream regression in lithair-core 1.10.0: model replay
+# reinserts Deleted event payloads. Kept separate from the passing suite;
+# failure is real, never converted into success with `expect = 1`.
+# Once fixed upstream, move this check into ../probatum.toml.
+[[check]]
+name = "deleted posts and pages stay absent after rebuild and restart"
+run = "python3 tests/asset_lifecycle.py --scenario delete"
+timeout = 90
+contains = ["PASS posts: delete", "PASS pages: delete"]
