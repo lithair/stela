@@ -15,6 +15,7 @@ use lithair_core::http::{FirewallConfig, HttpExposable, RouteGuard};
 use lithair_core::rbac::{RbacUser, ServerRbacConfig};
 use lithair_macros::DeclarativeModel;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -561,6 +562,25 @@ async fn rebuild(
 ) -> Result<usize> {
     let stored = load_posts(posts_dir).await?;
     let pages = load_pages(pages_dir).await?;
+    // The asset engine is durable: reconcile against all stored assets, not
+    // just paths rendered during this process. This also removes old content
+    // after a restart. Lithair 1.10 makes deletion durable (lithair#227).
+    let published_paths: HashSet<String> = stored
+        .iter()
+        .filter(|p| p.published)
+        .map(|p| format!("/posts/{}", p.slug))
+        .chain(
+            pages
+                .iter()
+                .filter(|p| p.published)
+                .map(|p| format!("/{}", p.slug)),
+        )
+        .collect();
+    for asset in engine.list_assets() {
+        if is_content_path(&asset.path) && !published_paths.contains(&asset.path) {
+            engine.delete_asset(&asset.path).await?;
+        }
+    }
     let site = load_site(settings_dir, fallback).await;
     let site = &site;
 
@@ -874,6 +894,14 @@ fn slug_is_safe(slug: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
+/// Only post/page URLs belong to content reconciliation. Built-in assets and
+/// any other namespace must survive it, including the theme's 404 and CSS.
+fn is_content_path(path: &str) -> bool {
+    path.strip_prefix("/posts/")
+        .or_else(|| path.strip_prefix('/'))
+        .is_some_and(slug_is_safe)
+}
+
 fn theme() -> Result<tera::Tera> {
     let mut tera = tera::Tera::default();
     tera.add_raw_templates(THEME.to_vec())?;
@@ -976,6 +1004,26 @@ fn json(status: StatusCode, body: &str) -> Resp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn content_paths_exclude_theme_assets_and_other_namespaces() {
+        for path in ["/posts/hello", "/about", "/a-page_2"] {
+            assert!(is_content_path(path), "content path: {path}");
+        }
+        for path in [
+            "/",
+            "/index.html",
+            "/404.html",
+            "/rss.xml",
+            "/style.css",
+            "/api/posts",
+            "/posts/",
+            "/posts/a/b",
+            "/posts/../x",
+        ] {
+            assert!(!is_content_path(path), "not a content path: {path}");
+        }
+    }
 
     #[test]
     fn markdown_becomes_html() {

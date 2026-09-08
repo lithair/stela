@@ -13,6 +13,22 @@ publish.
 
 **Status: design phase.** 0.0.1 on crates.io is a name reservation only.
 
+**Update 2026-09-08:** the implementation now uses Lithair 1.10.0. Rebuild
+reconciles persisted post/page assets with published model paths, using the
+durable `delete_asset` fix from lithair#227; theme assets are preserved.
+Returning posts or pages to draft now withdraws their public URLs, including
+after restart. Model DELETE is a separate remaining defect: Lithair 1.10.0's
+`DeclarativeHttpHandler::replay_events` reinserts Deleted event payloads.
+See `AGENTS.md` for current working guidance and `AUDIT.md` for verification;
+the historical status statements below have not all been updated.
+
+The former temporary Python lifecycle probe is now `tests/asset_lifecycle.py`,
+run by `probatum.toml` for unpublishing posts/pages across restarts. Python is
+test-only: cidx exports the probatum 0.9 runner from its release image, then
+runs the suite in a Python Alpine image. `tests/probatum-delete.toml` keeps
+the separate model DELETE regression explicitly failing until fixed upstream.
+See `tests/README.md`; prefer these reusable checks over temporary probes.
+
 ## Architecture decisions (settled July 2026 — don't relitigate without cause)
 
 - **Rendering: in-process static build, on write — not per request.**

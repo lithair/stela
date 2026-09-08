@@ -76,6 +76,30 @@ test("writing a post publishes it to the public site", async ({ page }) => {
   await expect(page.locator("text=Un vrai paragraphe.")).toBeVisible();
 });
 
+test("returning a published post to draft withdraws it from the site", async ({ page }) => {
+  const route = await signIn(page);
+  await page.fill('input[name="slug"]', "a-retirer");
+  await page.fill('input[name="title"]', "À retirer");
+  await page.fill('textarea[name="body"]', "Un texte à retirer.");
+  await page.check('input[name="published"]');
+  await page.click('button[type="submit"]');
+  await expect(page.locator('[data-slug="a-retirer"]')).toBeVisible();
+
+  await page.goto("/posts/a-retirer");
+  await expect(page.locator("article")).toContainText("Un texte à retirer.");
+
+  await page.goto(route);
+  await page.click('[data-slug="a-retirer"]');
+  await page.uncheck('input[name="published"]');
+  await page.click('button[type="submit"]');
+  await expect(page.locator("li").filter({ has: page.locator('[data-slug="a-retirer"]') }))
+    .toContainText("draft");
+
+  await page.goto("/posts/a-retirer");
+  await expect(page.locator("body")).not.toContainText("Un texte à retirer.");
+  await expect(page.locator("article h2")).toHaveText("Nothing here");
+});
+
 test("clicking a post loads it back into the form", async ({ page }) => {
   const route = await signIn(page);
 

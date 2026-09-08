@@ -42,6 +42,18 @@ workdir = "/work"
 volumes = ["${WORKSPACE}:/work"]
 description = "Static musl release build — stela's shipping artifact"
 
+# Export the pinned static runner for the Python-enabled probatum container.
+[presets.probatum-runner]
+name = "probatum-runner"
+image = "ghcr.io/probatum-org/probatum:0.9.0"
+entrypoint = [""]
+command = "sh -c 'mkdir -p target/probatum-runner && cp /usr/local/bin/probatum target/probatum-runner/probatum'"
+phase = "test"
+workdir = "/work"
+volumes = ["${WORKSPACE}:/work"]
+ephemeral = true
+description = "Export probatum 0.9 for the Python-enabled behaviour checks"
+
 # Browser tests. A third checker, and the division of labour has to stay sharp
 # or the same behaviour gets asserted in three places: cidx owns code quality,
 # probatum owns HTTP behaviour, this owns only what needs a browser — the

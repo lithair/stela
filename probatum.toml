@@ -33,6 +33,15 @@
 # run. That is the runner guaranteeing clean state rather than each check
 # defending itself.
 
+# Python owns this sequence only because probatum 0.9 cannot send PUT/DELETE
+# or restart a service mid-run. It starts its own isolated blog and returns a
+# nonzero exit on any mismatch. Python is test-only; see the cidx runner setup.
+[[check]]
+name = "unpublishing posts and pages persists across rebuilds and restarts"
+run = "python3 tests/asset_lifecycle.py"
+timeout = 90
+contains = ["PASS posts: unpublish", "PASS pages: unpublish", "PASS unrelated content and theme assets preserved"]
+
 [[check]]
 name = "stela new scaffolds a blog and says what to write down"
 run = "./target/x86_64-unknown-linux-musl/release/stela new /tmp/blog-a"

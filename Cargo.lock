@@ -1343,9 +1343,9 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "lithair-core"
-version = "1.9.0"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "728bd963a53f6eaca936a8c4fcd082264fe7f87e7c5cfd267d8d70b989997e0a"
+checksum = "6b62f545e422f189f39d21393a139066433d250eb1736db87bca29148335e2ad"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1391,9 +1391,9 @@ dependencies = [
 
 [[package]]
 name = "lithair-macros"
-version = "1.9.0"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3ca5d437aa76cbcb8e51514afa1c91ba1c14cfaeb50a300d042e43a4f336add"
+checksum = "9c2309f89c6649755afa7ad1b22a025bfa3bca65e939c4ec313b247a4458a3e1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2500,7 +2500,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
